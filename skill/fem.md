@@ -14,13 +14,15 @@ The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger
   - bolt head on its seat (countersink cone or washer face);
   - shank in the bore;
   - the mounting face in **one-sided contact** with the wall (frictionless).
-- Solve the contact with an active set:
-  1. Start with every face node held along the normal (`*TRANSFORM` + `*BOUNDARY`, `*NODE PRINT GLOBAL=YES`).
-  2. Release the nodes the wall would have to pull (RF·n > 0).
-  3. Re-add the nodes that move into the wall (U·n > 0).
-  4. Repeat until the set stops changing.
+- Solve the contact with CalculiX itself, not with a hand-written active set (with quadratic tets the node set flip-flops and never settles):
+  - a rigid C3D8 plate on the mounting plane (E 2e6, all nodes fixed) as master `S1`, the face nodes as a node slave surface;
+  - `*CONTACT PAIR,TYPE=NODE TO SURFACE,ADJUST=0.002`, `*SURFACE BEHAVIOR,PRESSURE-OVERCLOSURE=LINEAR` with 2e4 MPa/mm;
+  - solve at ~100 N, not at a unit load; frictionless zero-gap contact is proportional to the load, so scale the result;
+  - if it stalls with "too many cutbacks", the last converged increment scaled by 1/t is the answer.
+- **Take the contact plane from the model's own parameters (exact angle and point), then select face nodes by distance to it.** A plane tilted 7.547° instead of 7.5° with a 1e-3 tolerance caught 204 of 10 743 face nodes. The part then bore on a strip and looked 20 × softer and twice as weak. Print the face node count and compare it with the face area.
+- Equilibrium with contact: ΣRF over the part (load + seats) must be balanced by the wall alone, so the remainder must point along the wall normal.
 - A tightened screw is a preloaded joint. While the load-induced change of the screw force stays below the preload, the seat acts as bonded, so fix all the seat nodes; that is the right linear model.
-  - Check it after the solve: sum RF over each seat, take the axial and lateral parts, and scale them by the case force. Measured: |ΔF axial| ≤ 18 N on M4, far below any preload.
+  - Check it after the solve: sum RF over each seat, take the axial and lateral parts, and scale them by the case force. Measured with full-face contact: up to 201 N axial, 122 N lateral on M4 at 625 N preload.
   - Do not make the seat one-sided "for realism" without modelling the preload. With zero preload and a frictionless wall the part becomes a mechanism: k → 0 and deflections in metres.
   - Do not hold a whole countersink cone sideways while releasing it axially. Its nodes sit at different depths, so it acts as a moment clamp.
 - Never clamp a rigid cylinder through the part around a bolt. Any new feature inside that cylinder gets "concreted in" and shows thousands of MPa.
