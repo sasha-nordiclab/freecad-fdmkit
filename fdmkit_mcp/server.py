@@ -32,10 +32,14 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
 3. Native PartDesign only; sketches DoF 0; sizes in params. Bosses before holes.
    After adding material: holes still through, nothing past bed/mount faces.
 4. Overhangs <= 40 deg from print vertical; ligaments >= 3 mm; rims >= 6 mm.
+   Walls: multiples of 0.6, never < 1.8 (3 x 0.6 lines; 0.4 nozzle, 0.2 layer).
+   Lighten with tapered recesses / thin zones, not through windows (windows cost time).
 5. Strength/lightening only from FEM (fem.md): real supports (bolt seat + one-sided
    wall contact), impact by energy, anisotropic layer criterion; show a table and
    change the model only after the user agrees.
-6. Reply OK / errors / numbers. No exports unless asked (temp FEM files in scratchpad,
+6. Print time/grams: slice with tools/orca_slice.py (the user's own Orca presets, A1 NordicLab,
+   0.20mm NordicLab 0.6 Ballance, AzureFilm PETG HF); strength parts solid: 100 % zig-zag.
+7. Reply OK / errors / numbers. No exports unless asked (temp FEM files in scratchpad,
    deleted after). Renders: white, pastel, no text; colour = deflection."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,

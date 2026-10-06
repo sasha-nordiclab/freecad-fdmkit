@@ -19,6 +19,10 @@ The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger
   2. Release the nodes the wall would have to pull (RF·n > 0).
   3. Re-add the nodes that move into the wall (U·n > 0).
   4. Repeat until the set stops changing.
+- A tightened screw is a preloaded joint. While the load-induced change of the screw force stays below the preload, the seat acts as bonded, so fix all the seat nodes; that is the right linear model.
+  - Check it after the solve: sum RF over each seat, take the axial and lateral parts, and scale them by the case force. Measured: |ΔF axial| ≤ 18 N on M4, far below any preload.
+  - Do not make the seat one-sided "for realism" without modelling the preload. With zero preload and a frictionless wall the part becomes a mechanism: k → 0 and deflections in metres.
+  - Do not hold a whole countersink cone sideways while releasing it axially. Its nodes sit at different depths, so it acts as a moment clamp.
 - Never clamp a rigid cylinder through the part around a bolt. Any new feature inside that cylinder gets "concreted in" and shows thousands of MPa.
 - Sanity checks after each solve:
   - k > 0;
@@ -52,6 +56,8 @@ The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger
 4. Mirror-pair layouts: size each pair by the worse of the two cells, then mirror.
 5. Solve again with the windows. Accept when the peaks at the critical points do not move, and p99 of u in the window zones is ≤ ~0.75.
 
+6. Prefer recesses and thin wall zones over windows (see rules.md): thin to 2.4 where u ≤ ~0.5 and to 1.8 where u ≤ ~0.3, with ramps at the zone edges. Then solve again and slice both variants.
+
 ## Reinforcement: what works under impact
 - With a fixed impact energy, stiffening raises the force. σ grows only like √k, so "more material = stiffer" gains little.
   - Measured: a frame thickened from 3.6 to 4.5 mm cut the peaks by only 10–20 %.
@@ -59,4 +65,6 @@ The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger
 - A local pad with an abrupt edge creates a new peak at that edge. Taper every added pad at 45°, and still verify it with a solve.
 - Find the real peak location before reinforcing.
   - Gussets along a divider did nothing because the peak was in the opening corners.
+- On wall-bolted parts the governing mode is usually layer peel next to the bolts. A 45° fill in the wall-to-frame junction (leg 4 mm) cut the sustained case by 20 % for +0.2 g. Ribs and pads under the bolt made it worse (new peaks at their ends).
+- Before trusting any solve, check equilibrium: ΣRF = applied load, and the sign of the contact reactions.
 - Report results as a table: case, force, deflection, peak, peak/allowable, location, Δmass. Change the model only after the user agrees.

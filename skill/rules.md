@@ -5,6 +5,14 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 
 ## Walls
 - min 0.8; structural ≥ 1.6; heavy ≥ 2.4. Use multiples of the line width.
+- User profile for structural parts: 0.4 nozzle, all line widths 0.6, layer 0.2, 3 walls. Walls are multiples of 0.6 and never thinner than 1.8 (3 × 0.6), so a wall is all perimeters with no infill gap.
+- FEM assumes solid material, so slice to match. Set wall loops = thickest wall / line width (3.0 / 0.6 = 5) and top/bottom shell layers that cover the thickest plate (3.6 mm = 9 + 9 at 0.2). Then sparse infill has almost nothing left to fill, and it is faster than 100 %. In Bambu, 100 % needs a line pattern (zig-zag); `grid` fails with exit 238.
+- Slice with the user's own OrcaSlicer presets (`~/Library/Application Support/OrcaSlicer/user/default`, read-only): `tools/orca_slice.py model.stl ["process"] [overrides]`. Flatten each preset along `inherits` into a temporary copy and run `OrcaSlicer --slice 0 --load-settings "machine;process" --load-filaments filament --outputdir`.
+  - The copy keeps `inherits` and `from`.
+  - The copy's `compatible_printers` lists both the user printer and its system parent.
+  - `curr_bed_type` goes in the process.
+  - Orca writes no `result.json`; read the time and grams from the G-code header.
+  - Measured: 100 % rectilinear infill was faster than 40 % cubic on thin-walled parts.
 - "N walls" means N perimeters: 2 ≈ 0.87 mm, 3 ≈ 1.3 mm.
 - Keep ≥ 2 mm of material between a groove or slot and an edge.
 
@@ -72,9 +80,29 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - Labels: no A/B or version prefixes. FreeCAD object Names cannot be renamed, so set clean Labels.
 - Save the document after each confirmed change. `run()` autosaves every 5 minutes.
 
+## Making a part parametric (for other sizes)
+- Put a few driver params at the top of `params` (the size of the thing the part holds). Under them go build, mount and lightening params, then a "Derived" block of formulas. Sketch dimensions reference only these cells.
+- Dimension every sketch vertex by a formula (`poly` with expressions). Tie placements, pattern lengths, mirror planes and body offsets to params by expressions; a rotation can be `rotation(vector(..); a) * rotation(..)`.
+- Turn optional cuts off with `Suppressed = min(zone sizes; depth * 100) < limit`, so a smaller size never builds a broken pocket.
+- Guard positions that can collide when sizes shrink (screws, bosses) with `min()`. Never let a guard put two faces exactly tangent: OCC booleans fail there, so leave 0.5 mm.
+- Migrating: build the new body next to the old one inside one transaction, compare the shapes (symmetric-difference volume), then swap the references and delete the old body. Delete the old body first if you want clean object Names.
+- Test the parametrisation: set several smaller and larger sizes in a transaction, check one valid solid, holes clear, `chk()` and that the bbox equals the derived length, then abort.
+- API traps:
+  - `Spreadsheet.clearAll()` is not undone by `abortTransaction`; rewrite and clear cells one by one.
+  - A PartDesign pattern created from Python does not become the Tip; set `body.Tip` to it.
+  - A Hole needs its base recomputed before its properties are set.
+
 ## Modelling
 - Rounds go in sketches (`fil`), not as fillets on complex edges.
 - Thin wall mount: countersunk screws plus a separate backing plate Body with nut pockets, printed flat.
+
+## Lightening: recesses and thin walls before windows
+- Through windows in thin walls cost print time: each one adds perimeters and travel. Measured on a 3 mm wall: windows −14 g but +26 min against solid walls.
+- First choice: one-sided recesses (pockets) or thinner wall zones where FEM utilisation is low. Same grams as windows, 15 % faster.
+  - Leave ≥ 1.8 mm (3 × 0.6) at the floor; depths in steps of 0.6.
+  - Use a Pocket with TaperAngle so the closing ramp overhangs ≤ 40° from print vertical: taper 50° on a vertical wall, plus the wall tilt on a tilted wall.
+  - Draw the recess sketch on the measured face. A sketch 0.1 mm inside the face leaves a skin film over the recess. Probe the face position with a line common() and do not trust a nominal number.
+- Windows only where a through opening is needed (drainage, weight that recesses cannot reach).
 
 ## Lightening windows
 - Size and place windows from a calculation (see `fem.md`), not by eye or from a decorative pattern.
