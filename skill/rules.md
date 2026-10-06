@@ -40,6 +40,12 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - TPU: flexible parts. Slow print; add clearance +0.1.
 - ASA/ABS: the A1 is open, so they warp. Avoid long flat parts and sharp corners on the bed, and use a brim. Flag this to the user.
 
+## Symmetry first
+- Before modelling, find the mirror planes and mirrored pairs: bodies such as Module_A/B, bays about a divider, and paired walls.
+- Build one side and derive the other by mirroring. Never edit both sides by hand.
+- Window, hole and rib layouts must be symmetric about those planes.
+- Every design revision checks the symmetry first.
+
 ## Modelling
 - Rounds go in sketches (`fil`), not as fillets on complex edges.
 - Lightening windows: V or triangle shapes with roofs ≤ 35° from vertical and a rim ≥ 6–7 mm.

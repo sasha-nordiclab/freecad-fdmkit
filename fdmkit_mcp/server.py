@@ -18,7 +18,19 @@ sk(name, on='XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
 slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r)
 pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through') | revolve(sk,angle=360,axis='V_Axis'|'Z')
 dim(sk,'r1_w',val) | chk() | why(name) | tree() | undo() | selftest() | reload()
-Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l..."""
+Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l...
+RULE symmetry: parts are often mirrored pairs (Module_A/Module_B) or symmetric about a
+plane (bays about a divider). Model one side, derive the other by mirroring; make
+layouts (windows, holes, ribs) symmetric; every design revision checks symmetry first."""
+
+INSTRUCTIONS = """fdmkit design rules:
+1. Symmetry first. Find mirror planes and mirrored pairs (bodies, bays, walls) before
+   modelling. Build one half and mirror it (PartDesign Mirrored or a mirrored copy);
+   never hand-edit both sides. Window/hole/rib layouts must be symmetric about those
+   planes. Each revision starts by checking that the symmetry still holds.
+2. Native PartDesign only; sketches at DoF 0; sizes in the params sheet.
+3. Overhangs <= 40 deg from print vertical; ligaments >= 3 mm; rims >= 6 mm.
+4. Reply with OK / errors / numbers. No screenshots, no exports unless asked."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
@@ -32,7 +44,8 @@ def handle(msg):
     if method == 'initialize':
         result = {'protocolVersion': msg.get('params', {}).get('protocolVersion', '2025-06-18'),
                   'capabilities': {'tools': {}},
-                  'serverInfo': {'name': 'fdmkit', 'version': '0.1.0'}}
+                  'serverInfo': {'name': 'fdmkit', 'version': '0.1.0'},
+                  'instructions': INSTRUCTIONS}
     elif method == 'tools/list':
         result = {'tools': [TOOL]}
     elif method == 'tools/call':
