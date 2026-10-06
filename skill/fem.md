@@ -1,0 +1,62 @@
+# Strength checks and calculated lightening (load on demand)
+
+The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger/scripts/fem/`.
+
+## Tools (all bundled with FreeCAD 26.3)
+- Mesh: `…/FreeCAD.app/Contents/Resources/bin/gmsh part.step -3 -order 2 -setnumber Mesh.SecondOrderLinear 1 -clmax 2.5 -clmin 1.0 -format inp`.
+  - Without `SecondOrderLinear 1`, curved C3D10 elements fail with "nonpositive jacobian".
+- Solve: `…/bin/ccx`, linear static, one STEP per load case.
+- Put temporary STEP and mesh files only in the scratchpad and delete them afterwards. Never write them into the project unless asked.
+- Ask before exporting anything. Do not mesh with chamfers ≤ 0.5 mm, because they make the mesh many times heavier; say so in the report.
+
+## Supports (the most common source of wrong answers)
+- Model the mounting as it really is:
+  - bolt head on its seat (countersink cone or washer face);
+  - shank in the bore;
+  - the mounting face in **one-sided contact** with the wall (frictionless).
+- Solve the contact with an active set:
+  1. Start with every face node held along the normal (`*TRANSFORM` + `*BOUNDARY`, `*NODE PRINT GLOBAL=YES`).
+  2. Release the nodes the wall would have to pull (RF·n > 0).
+  3. Re-add the nodes that move into the wall (U·n > 0).
+  4. Repeat until the set stops changing.
+- Never clamp a rigid cylinder through the part around a bolt. Any new feature inside that cylinder gets "concreted in" and shows thousands of MPa.
+- Sanity checks after each solve:
+  - k > 0;
+  - deflections of a few mm, not 10⁵;
+  - the bearing node count is plausible.
+  If a check fails, the supports are wrong. Fix them before reporting.
+
+## Loads
+- Sustained loads, such as buoyancy F = ρ·g·V or weights: compare with a creep allowable (safety factor 4).
+- Impact by a person (a jar knocked into the part): use the energy method.
+  - E = ½mv². Force F = √(2·E·k) = v·√(m·k), where k is the local stiffness at the hit point, from a 1 N unit load.
+  - Ask the user how hard the hits are: 0.3 m/s is careful, 0.5 m/s careless, 1 m/s a drop.
+  - Safety factor 2.
+- Temperature factor: 0.85 at 38 °C for PETG.
+
+## Failure criterion: anisotropic, layers ⟂ print Z
+- In-plane stress (σxx, σyy, τxy, plus compressive σzz) is compared with the XY strength X.
+- Layer separation (tensile σzz) is compared with the interlayer strength Z.
+- Interlayer shear (τxz, τyz) is compared with S.
+- FI = √((σ_inplane,vM / X)² + (σzz⁺ / Z)² + (τ_il / S)²). Use the design strengths: TDS value × temperature factor ÷ safety factor.
+- Default PETG when no TDS is given: X 40, Z 20, S 15 MPa. Prefer the user's TDS.
+- Report peak FI per load case with its location, excluding about 6 mm around supports.
+
+## Calculated lightening
+1. Solve the part with solid walls. Get the utilisation field u = FI / allowable (worst case per element).
+2. Lay a diamond lattice over each wall. For each cell, take the p90 of u inside the cell and require solidity ρ = clamp(K·u, ρ_min, 1).
+   - ρ_min comes from the minimum ligament.
+   - The window is the cell diamond scaled by √(1 − ρ).
+   - Shrink windows to fit the rim; drop those under 7 mm.
+3. K is about 1.8 (stress concentration at a window). Lower K cuts more but raises the peaks at the window tips.
+4. Mirror-pair layouts: size each pair by the worse of the two cells, then mirror.
+5. Solve again with the windows. Accept when the peaks at the critical points do not move, and p99 of u in the window zones is ≤ ~0.75.
+
+## Reinforcement: what works under impact
+- With a fixed impact energy, stiffening raises the force. σ grows only like √k, so "more material = stiffer" gains little.
+  - Measured: a frame thickened from 3.6 to 4.5 mm cut the peaks by only 10–20 %.
+- Large gains come from removing stress concentrations: bigger corner radii, smooth transitions, and spreading the strain energy over more material.
+- A local pad with an abrupt edge creates a new peak at that edge. Taper every added pad at 45°, and still verify it with a solve.
+- Find the real peak location before reinforcing.
+  - Gussets along a divider did nothing because the peak was in the opening corners.
+- Report results as a table: case, force, deflection, peak, peak/allowable, location, Δmass. Change the model only after the user agrees.

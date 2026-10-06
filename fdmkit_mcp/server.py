@@ -23,14 +23,20 @@ RULE symmetry: parts are often mirrored pairs (Module_A/Module_B) or symmetric a
 plane (bays about a divider). Model one side, derive the other by mirroring; make
 layouts (windows, holes, ribs) symmetric; every design revision checks symmetry first."""
 
-INSTRUCTIONS = """fdmkit design rules:
-1. Symmetry first. Find mirror planes and mirrored pairs (bodies, bays, walls) before
-   modelling. Build one half and mirror it (PartDesign Mirrored or a mirrored copy);
-   never hand-edit both sides. Window/hole/rib layouts must be symmetric about those
-   planes. Each revision starts by checking that the symmetry still holds.
-2. Native PartDesign only; sketches at DoF 0; sizes in the params sheet.
-3. Overhangs <= 40 deg from print vertical; ligaments >= 3 mm; rims >= 6 mm.
-4. Reply with OK / errors / numbers. No screenshots, no exports unless asked."""
+INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
+1. Understand the part in use first: how it mounts, what bears where, real loads,
+   mating-part shapes. Proven functional details (ledges, fits) stay unless told.
+2. Symmetry first. Copy vs mirror is decided by hole/mount coordinates, never bbox.
+   Build one side; derive the other natively (Part::Mirroring / App::Link).
+   Layouts symmetric; every revision re-checks symmetry.
+3. Native PartDesign only; sketches DoF 0; sizes in params. Bosses before holes.
+   After adding material: holes still through, nothing past bed/mount faces.
+4. Overhangs <= 40 deg from print vertical; ligaments >= 3 mm; rims >= 6 mm.
+5. Strength/lightening only from FEM (fem.md): real supports (bolt seat + one-sided
+   wall contact), impact by energy, anisotropic layer criterion; show a table and
+   change the model only after the user agrees.
+6. Reply OK / errors / numbers. No exports unless asked (temp FEM files in scratchpad,
+   deleted after). Renders: white, pastel, no text; colour = deflection."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
