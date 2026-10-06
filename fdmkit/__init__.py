@@ -8,6 +8,7 @@ constraints and fails (rolling back) unless the sketch ends at DoF 0.
 import ast
 import math
 import re
+import time
 
 import FreeCAD as App
 import Part
@@ -523,6 +524,18 @@ def undo():
 
 
 # ---------------------------------------------------------------- entry
+AUTOSAVE_S = 300
+_saved = {}
+
+
+def _autosave(d):
+    """Save a document that has a file at most every AUTOSAVE_S seconds."""
+    now = time.time()
+    if d.FileName and now - _saved.get(d.Name, 0) >= AUTOSAVE_S:
+        d.save()
+        _saved[d.Name] = now
+
+
 def run(expr):
     """Run 'a(); b(); c()' as ONE transaction: one result per call, ' ; '-joined.
     Any failure rolls the whole batch back and names the failing step."""
@@ -540,6 +553,7 @@ def run(expr):
                 exec(compile(ast.Module([node], []), '<fdmkit>', 'exec'), ns)
         if d:
             d.commitTransaction()
+            _autosave(d)
         return ' ; '.join(out) or 'OK'
     except Exception as e:
         if d:
