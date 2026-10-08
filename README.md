@@ -27,7 +27,7 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 1. Clone the repository and link it into FreeCAD's `Mod` folder. The folder name depends on the FreeCAD version; for the 26.3 builds it is `v26-3`:
 
    ```sh
-   git clone https://github.com/sasha-nordiclab/fdmkit.git
+   git clone https://github.com/sasha-nordiclab/freecad-fdmkit.git fdmkit
    ln -s "$PWD/fdmkit" "$HOME/Library/Application Support/FreeCAD/v26-3/Mod/fdmkit"
    ```
 
