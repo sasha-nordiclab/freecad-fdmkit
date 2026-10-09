@@ -44,7 +44,12 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
 8. At the start of work in each CAD project, immediately create or update that project's
    AGENTS.md as a handoff for the next AI: purpose, current model and parameters,
    verified state, decisions, open questions, and how to resume through this MCP.
-   Keep it current after each substantive model change; do not wait until the end."""
+   Keep it current after each substantive model change; do not wait until the end.
+9. Move the FreeCAD camera freely as needed while working. After all model operations,
+   return the GUI to an overall view of the final model: leave any temporary edit
+   mode, restore the intended final Body visibility, switch to axonometric view and
+   Fit All via fdmkit.run(expr). Preserve the user's selection unless the agent made
+   a temporary selection; then clear only that selection."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
