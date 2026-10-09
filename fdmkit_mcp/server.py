@@ -49,7 +49,11 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
    return the GUI to an overall view of the final model: leave any temporary edit
    mode, restore the intended final Body visibility, switch to axonometric view and
    Fit All via fdmkit.run(expr). Preserve the user's selection unless the agent made
-   a temporary selection; then clear only that selection."""
+   a temporary selection; then clear only that selection.
+10. Give each final FreeCAD Body a distinct saturated pastel ShapeColor as soon as it
+    exists, so the model looks finished in the live GUI throughout construction and
+    in the final overall view. Use light colours with clear hue contrast; do not defer
+    the colours to renders or exports."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
