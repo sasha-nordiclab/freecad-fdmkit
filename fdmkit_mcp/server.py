@@ -40,7 +40,11 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
 6. Print time/grams: slice with tools/orca_slice.py (the user's own Orca presets, A1 NordicLab,
    0.20mm NordicLab 0.6 Ballance, AzureFilm PETG HF); strength parts solid: 100 % zig-zag.
 7. Reply OK / errors / numbers. No exports unless asked (temp FEM files in scratchpad,
-   deleted after). Renders: white, pastel, no text; colour = deflection."""
+   deleted after). Renders: white, pastel, no text; colour = deflection.
+8. At the start of work in each CAD project, immediately create or update that project's
+   AGENTS.md as a handoff for the next AI: purpose, current model and parameters,
+   verified state, decisions, open questions, and how to resume through this MCP.
+   Keep it current after each substantive model change; do not wait until the end."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
