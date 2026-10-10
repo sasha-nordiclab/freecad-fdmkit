@@ -2,7 +2,7 @@
 
 These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` and `skill/rules.md`.
 
-- Target: FreeCAD 26.3dev weekly (OCC 8.0.1, Py 3.13, macOS). The API is checked with probes against the running FreeCAD, not from memory.
+- Target: FreeCAD 26.3 RC1 on macOS arm64; also keep the 2026-09-29 weekly working. The API is checked with probes against the running FreeCAD, not from memory.
 - Layout:
   - `fdmkit/__init__.py` is the whole kit.
   - `Init.py` is the autoload entry.
@@ -16,4 +16,5 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
   - Sketch helpers leave the sketch at DoF 0.
 - Locale is en_DK, so Spreadsheet values are written as formulas (`'=40.5'`).
 - FreeCAD rejects unit tokens (`h m s g l t mm deg in ...`) as alias names.
-- 26.3dev bug: a change to an aliased cell does not touch its dependents. `_SheetObserver` works around it.
+- Spreadsheet alias changes in the tested weekly needed `_SheetObserver` to touch dependents. Keep the workaround unless an isolated RC1 regression test proves it unnecessary.
+- 26.3 properties used by the kit include StartType/StartOffset/StartReference, Common on subtractive features, Hole cosmetic threads and PolarPattern SuppressedIndices. Probe property availability and enumeration values before adding more features.

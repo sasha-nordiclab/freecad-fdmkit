@@ -6,7 +6,7 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 
 ## What it does
 
-- **Native PartDesign only.** Bodies, datum planes, sketches, Pad, Pocket and Revolve: the same model you would build by hand, editable in the GUI afterwards. No imported meshes, no `Part::Feature` blobs.
+- **Native PartDesign only.** Bodies, datum planes, sketches, Pad, Pocket, Hole, Revolution, Groove and patterns: the same model you would build by hand, editable in the GUI afterwards. No imported meshes, no `Part::Feature` blobs.
 - **Fully constrained sketches.** Every sketch helper (`rect`, `circ`, `slot`, `poly`, `fil`) adds its own constraints. A call fails and rolls back unless the sketch ends at 0 degrees of freedom.
 - **Sizes live in a spreadsheet.** `P(w=40, d='w/2')` writes to a `params` sheet. Sketches and features refer to the parameters by name, so changing one value updates the whole part.
 - **One call, one transaction.** If any step of a batch fails, the whole batch is undone and the reply names the failing step. `undo()` reverts the last batch. Documents that have a file are saved at most every 5 minutes.
@@ -17,7 +17,7 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 ## Requirements
 
 - macOS. The paths in `tools/fc.py` and `tools/orca_slice.py` are macOS paths; on Linux or Windows, change them.
-- FreeCAD 26.3 development build. fdmkit is developed and tested on the weekly build of 2026-09-29 (OCC 8.0.1, Python 3.13); older versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
+- FreeCAD 26.3 RC1. fdmkit is tested on RC1 (2026-10-08) and the weekly build of 2026-09-29; older versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
 - The [FreeCAD MCP addon](https://github.com/neka-nat/freecad-mcp) (`FreeCADMCP`), for its XML-RPC server on `127.0.0.1:9875`. fdmkit uses only that RPC server, not the addon's own MCP server.
 - Python 3.10 or newer on the host for the MCP server. It has no dependencies.
 - Optional: OrcaSlicer, for `orca_slice.py`.
@@ -92,14 +92,21 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `slot(sk, length, width, x, y, angle)` | Slot with round ends |
 | `poly(sk, [(x, y), ...])` | Closed polygon |
 | `fil(sk, (x, y), r)` | Sketch fillet at the corner nearest to the point |
-| `pad(sk, len, side='one', reverse=False)` | Pad; `side` is `'one'`, `'two'` or `'sym'` |
-| `pocket(sk, depth='through')` | Pocket |
-| `revolve(sk, angle=360, axis='V_Axis')` | Revolution |
+| `half(sk)` | Keep the upper half of a symmetric sketch, close along its horizontal axis and preserve driving dimensions |
+| `pad(sk, len, side='one', reverse=False, start='profile', offset=0, reference=None)` | Pad; `side` is `'one'`, `'two'` or `'sym'` |
+| `pocket(sk, depth='through', start='profile', offset=0, reference=None, operation='subtract')` | Pocket; `operation='common'` keeps the intersection |
+| `hole(sk, diameter, depth='through', thread_type=None, thread_size=None, model_thread=False, cosmetic_thread=True)` | PartDesign Hole; cosmetic threads do not make printable thread geometry |
+| `revolve(sk, angle=360, axis='V_Axis', start='profile', offset=0, reference=None)` | Revolution; also accepts `side`, `reverse`, `project_axis` |
+| `groove(sk, angle=360, axis='V_Axis', start='profile', offset=0, reference=None, operation='subtract')` | Subtractive revolution; also accepts `side`, `reverse`, `project_axis` |
+| `polar(features, occurrences, axis='Z', angle=360, suppressed=())` | Native PolarPattern; suppressed instance indices start at zero |
+| `mirror(features, plane='XY')` / `move(feature, after)` | Native mirror and feature tree reordering |
 | `dim(sk, 'r1_w', val)` | Change one named sketch dimension |
 | `chk()` / `why(name)` / `tree()` | Checks, one failure explained, feature tree |
 | `undo()` | Undo the last batch |
 
 Lengths and angles take a number, a parameter name or an expression such as `'wall*2'`.
+
+For the 26.3 start modes, use `start='offset', offset='wall'` or `start='reference', reference='top_plane'`. References must be origin or datum planes. `hole` accepts FreeCAD thread type and size names reported by that build; a cosmetic thread is metadata/visualization and does not appear as helical STL geometry. `polar` counts the original as one occurrence. Unsupported 26.3 properties fail with a clear error instead of silently changing the model.
 
 ## Security
 

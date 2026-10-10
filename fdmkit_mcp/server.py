@@ -18,7 +18,14 @@ sk(name, on='XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
 Parallel loft sections: attach sketches to an origin plane and set a parametric
 AttachmentOffset; create separate datum planes only when they add a real reference.
 slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r)
+half(sk) cuts a sketch symmetric about its H axis to y>=0, in place
 pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through') | revolve(sk,angle=360,axis='V_Axis'|'Z')
+26.3 starts: pad/pocket/revolve/groove(...,start='profile'|'offset'|'reference',
+offset=expr,reference='XY'|datum); pocket/groove/hole(...,operation='subtract'|'common')
+hole(sk,diameter,depth='through',thread_type=None,thread_size=None,
+model_thread=False,cosmetic_thread=True) | groove(sk,angle=360,axis='V_Axis'|'Z')
+polar(features,occurrences,axis='Z',angle=360,suppressed=()) indices are zero-based
+mirror([features],plane='XY'|datum) PartDesign::Mirrored | move(feature, after)
 dim(sk,'r1_w',val) | chk() | why(name) | tree() | undo() | selftest() | reload()
 Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l...
 RULE symmetry: parts are often mirrored pairs (Module_A/Module_B) or symmetric about a
@@ -73,7 +80,7 @@ def handle(msg):
     if method == 'initialize':
         result = {'protocolVersion': msg.get('params', {}).get('protocolVersion', '2025-06-18'),
                   'capabilities': {'tools': {}},
-                  'serverInfo': {'name': 'fdmkit', 'version': '0.1.0'},
+                  'serverInfo': {'name': 'fdmkit', 'version': '0.2.0'},
                   'instructions': INSTRUCTIONS}
     elif method == 'tools/list':
         result = {'tools': [TOOL]}
