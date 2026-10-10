@@ -68,6 +68,11 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - Never edit both sides by hand.
 - Window, hole and rib layouts must be symmetric about those planes. Every design revision checks the symmetry first.
 
+## Sketch supports and minimal datum planes
+- Attach sketches to stable origin planes when they share an orientation. For loft sections at different heights, put each sketch on the same origin plane and drive its `AttachmentOffset.Base.z` with a parameter expression.
+- Create a separate datum plane only when it defines a meaningful independent reference or orientation. Do not add one plane merely to place each parallel sketch at a different Z level.
+- Build one complete repeated feature before patterning it, when the native pattern can include its constituent features. After simplifying the tree, verify sketch DoF 0, feature validity, and the final shape against the prior model.
+
 ## Feature order and checks after every change
 - Material that surrounds a hole (bosses, pads) goes **before** the hole in the tree, so the hole cuts it.
 - One-sided ThroughAll holes and pockets cut only from their sketch plane forward.

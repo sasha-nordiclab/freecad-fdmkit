@@ -15,6 +15,8 @@ per call; any ERR rolls the whole batch back. Batch related steps to save round 
 Lengths/angles: number or expression; bare params names allowed ('wall*2').
 P(name=val,...) set | P() list | new(name) | plane(name, base='XY'|datum, offset)
 sk(name, on='XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
+Parallel loft sections: attach sketches to an origin plane and set a parametric
+AttachmentOffset; create separate datum planes only when they add a real reference.
 slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r)
 pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through') | revolve(sk,angle=360,axis='V_Axis'|'Z')
 dim(sk,'r1_w',val) | chk() | why(name) | tree() | undo() | selftest() | reload()
@@ -31,6 +33,10 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
    Layouts symmetric; every revision re-checks symmetry.
 3. Native PartDesign only; sketches DoF 0; sizes in params. Bosses before holes.
    After adding material: holes still through, nothing past bed/mount faces.
+   Keep the feature tree small and editable: for parallel loft sections, attach
+   sketches to one origin plane with expression-driven AttachmentOffset values.
+   Add separate datum planes only for distinct geometric references, not merely
+   to give each parallel sketch a different height.
 4. Overhangs <= 40 deg from print vertical; ligaments >= 3 mm; rims >= 6 mm.
    Walls: multiples of 0.6, never < 1.8 (3 x 0.6 lines; 0.4 nozzle, 0.2 layer).
    Lighten with tapered recesses / thin zones, not through windows (windows cost time).
