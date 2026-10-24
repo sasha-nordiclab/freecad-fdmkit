@@ -1,0 +1,65 @@
+--- a/freecad/i10g/i10g.py
++++ b/freecad/i10g/i10g.py
+@@ -65,6 +65,20 @@
+ 
+ def err(msg):
+     App.Console.PrintError(f'{msg}\n')
++
++
++def getShapeMaterial(vo):
++    """FreeCAD 1.0+ replaced ViewProviderLink.ShapeMaterial with ShapeAppearance."""
++    if hasattr(vo, 'ShapeMaterial'):
++        return vo.ShapeMaterial
++    return vo.ShapeAppearance[0]
++
++
++def setShapeMaterial(vo, m):
++    if hasattr(vo, 'ShapeMaterial'):
++        vo.ShapeMaterial = m
++    else:
++        vo.ShapeAppearance = (m,)
+ 
+ 
+ def createObjState(obj):
+@@ -77,8 +91,8 @@
+     transparency = 0
+     if obj.TypeId == 'App::Link':
+         material = obj.ViewObject.OverrideMaterial
+-        color = list(obj.ViewObject.ShapeMaterial.DiffuseColor)[:3]
+-        transparency = obj.ViewObject.ShapeMaterial.Transparency
++        color = list(getShapeMaterial(obj.ViewObject).DiffuseColor)[:3]
++        transparency = getShapeMaterial(obj.ViewObject).Transparency
+     return {
+         'name': obj.Name,
+         'pos': pos,
+@@ -122,10 +136,10 @@
+     if obj.TypeId == 'App::Link' and 'material' in state:
+         if state['material']:
+             obj.ViewObject.OverrideMaterial = True
+-            obj.ViewObject.ShapeMaterial = state['material']
++            setShapeMaterial(obj.ViewObject, state['material'])
+         else:
+             obj.ViewObject.OverrideMaterial = False
+-            obj.ViewObject.ShapeMaterial = newMaterial()
++            setShapeMaterial(obj.ViewObject, newMaterial())
+ 
+ 
+ def animObjState(obj, s1, s2, delta):
+@@ -142,14 +156,14 @@
+         if m1 or m2:
+             obj.Visibility = True
+             obj.ViewObject.OverrideMaterial = True
+-            obj.ViewObject.ShapeMaterial = interpolateMaterial(
++            setShapeMaterial(obj.ViewObject, interpolateMaterial(
+                 m1 or newMaterial(),
+                 m2 or newMaterial(),
+                 delta
+-            )
++            ))
+         elif obj.ViewObject.OverrideMaterial:
+             obj.ViewObject.OverrideMaterial = False
+-            obj.ViewObject.ShapeMaterial = newMaterial()
++            setShapeMaterial(obj.ViewObject, newMaterial())
+ 
+ 
+ def getState():

@@ -14,6 +14,9 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
   - Only native PartDesign: no Part::Feature blobs.
   - Each call is one transaction and returns one line.
   - Sketch helpers leave the sketch at DoF 0.
+- `run()` namespace (`_ns()`): the `__all__` calls plus `App` and `Gui` for both `?expr` reads and transactions. Before 2026-10-20 `?expr` had no `Gui` and transactions had no `App` (NameError).
+- Hidden documents (selftest) still have a Gui document, so selection-based helpers (`freeze_all`, `thaw_all`) are testable there.
+- FreeCAD 26 view providers of links expose `ShapeAppearance` (a material list), not `ShapeMaterial`; addons written for 0.19/0.21 break on it. Our fix for i10g is `tools/patches/i10g-shapeappearance.patch`; `i10g_video()` refuses to run without it.
 - Locale is en_DK, so Spreadsheet values are written as formulas (`'=40.5'`).
 - FreeCAD rejects unit tokens (`h m s g l t mm deg in ...`) as alias names.
 - Spreadsheet alias changes in the tested weekly needed `_SheetObserver` to touch dependents. Keep the workaround unless an isolated RC1 regression test proves it unnecessary.

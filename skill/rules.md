@@ -1,5 +1,48 @@
 # FDM rules — Bambu A1, 0.4 nozzle, 0.2 layer
 
+## Standard FreeCAD solutions first
+- Before designing a component or mechanism, check native FreeCAD features, installed workbenches, standard parts, and manufacturer CAD for a suitable solution. Check purchased hardware such as bearings, fasteners, gears, and pulleys before drawing substitutes.
+- Prefer a standard component when its dimensions, interfaces, and required adjustability fit the design. Resize through supported parameters, verify the dimensions and source, and record the choice in the project handoff.
+- Keep custom printable parts as native, fully constrained parametric geometry. Create custom hardware or adapters when no suitable standard solution meets the requirements. A verified envelope is enough when detailed hardware geometry is unnecessary.
+
+## Standard workbenches for each job
+Use FreeCAD's own tools and workbenches instead of hand-made scripts or geometry. Installed in FreeCAD 26.3 (built-in + user `Mod`):
+
+| Workbench | Use it for | Not for |
+| --- | --- | --- |
+| Sketcher | every 2D profile, fully constrained (DoF 0), dimensions from `params` | — |
+| PartDesign | all printable parts: pads, pockets, holes (with countersinks), revolves, lofts, patterns, mirrors | purchased parts |
+| Part | reference envelopes and purchased-part stand-ins, booleans on non-printed shapes, Check Geometry, cross-sections | printable parts |
+| Spreadsheet | the `params` sheet: drivers, derived values, report cells | geometry |
+| Assembly | assemblies of linked Bodies: Grounded/Fixed/Slider/Revolute/Cylindrical joints, Gears/Belt/RackPinion couplings, joint limits for ranges of motion, Simulation for movement, BOM, exploded views | — |
+| ExplodedAssembly (user) | exploded views of an assembly with trajectories, bolt groups, camera animation | joint motion (use Assembly Simulation) |
+| Inbetweening / i10g (user) | animation steps of placement, visibility and colour with interpolation; PNG, MP4, GIF export (patched for macOS: frames stream to ffmpeg stdin) | — |
+| Animate (user) | trajectories with timed poses, image-sequence export | its Server object (runs network commands with `exec`) |
+| Fasteners (user) | screws, nuts, washers, inserts, threaded rods | — |
+| freecad.gears (user) | gears, racks, timing pulleys (GT2 `TimingGear`) | — |
+| UNI-Rolling-Bearing (user) | visual bearing models; the dimensional envelope stays a native Body | — |
+| SheetMetal (user) | bent sheet-metal parts and flat patterns | printed parts |
+| Measure | distances, angles and clearances the user should see in the model | — |
+| Material | material cards on Bodies (PETG, TPU, stainless) for mass and FEM | — |
+| Fem | strength checks with gmsh + CalculiX (`fem.md`) | — |
+| Plot | charts of results (FEM curves, sweeps) | — |
+| Mesh, MeshPart | STL export and import for slicing and scans, mesh checks and repair | modelling printable parts |
+| Import | STEP/IGES of manufacturer CAD (keep it in `reference/`, unmodified) | — |
+| TechDraw | drawings with dimensions when the user asks | — |
+| Draft | annotations, working planes, simple 2D layout; Link arrays of repeated components | printable features (use PartDesign patterns) |
+| Surface | freeform surfaces where loft/sweep cannot follow the shape | prismatic parts |
+| Inspection | comparing a model with a scan or mesh (e.g. the JOBO drum scan) | — |
+| Points, ReverseEngineering | point clouds and scans turned into reference geometry | final printable geometry |
+| OpenSCAD | importing existing `.scad` files only | new parts |
+| CAM, BIM, Robot | not used for FDM parts | — |
+| AddonManager | installing a missing workbench, only after the user agrees | — |
+| Start, Help, Web, Show, Test, Tux, PieMenu, OpenTheme, FreeCADMCP | UI and infrastructure (FreeCADMCP is fdmkit's RPC); do not change them | — |
+
+- Do not position or animate parts with Placement expressions on links or Bodies; that is the Assembly workbench's job.
+- In Assembly joints, set `Detach1`/`Detach2` and give `Placement1`/`Placement2` explicitly, driven by `params` expressions, so the joints do not depend on OCC face orientation. A Distance joint driven by a parameter gives a deterministic position for a slider; suppress it to run the slider's Simulation.
+- Simulation motion formulas for Revolute joints are in radians (`2*pi*time` = 1 rev/s).
+- Animations and exploded-view videos: use ExplodedAssembly, i10g or Animate (plus Assembly Simulation for joint motion) instead of a hand-written placement loop; the procedure is in "Animations and exploded views" below.
+
 ## Orientation first
 Fix the print orientation before modelling and keep "model axis → print Z" in mind.
 
@@ -23,8 +66,17 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 
 ## Holes and slots
 - A hole or slot whose top would be an arch gets a teardrop or diamond top (sides ≤ 35–40°).
+- A radial Hole into a cylinder: put its sketch 1 mm outside the surface (and add 1 mm to the depth). A sketch plane tangent to the cylinder makes the FusedFilamentDesign teardrop pocket an invalid shape.
+- Horizontal cavities (bores behind bearings, seats in horizontal tubes) trap splash water: add a drain/vent hole at the lowest point and keep crush ribs off that spot.
 - Round ends are fine at the bottom of a void. Plain hex-nut pockets print fine as they are.
 - An annular groove on a vertical face cannot print. Use a recess without an island, or move the groove to the face that is up in print.
+
+## Fastener edge distance (user rule, 2026-10-18)
+- Measure from the largest outline a fastener leaves in the face: the countersink, counterbore or counterdrill diameter as modelled (M4 countersunk: Ø9.2 countersink, Ø9.8 counterdrill), the nut pocket corners, the washer or the head footprint. Not from the hole centre or the shank.
+- That outline keeps ≥ 3 mm (the ligament rule) to every outer edge, wall face, fillet, slot, window, neighbouring recess and to the side of any part it sits beside. M4 countersunk: centre ≥ 9.8 / 2 + 3 = 7.9 from each edge (one param, e.g. `fd_edge = (m4_head_d + 0.6) / 2 + 3`). Plain hole without a head: hole edge ≥ 3 mm.
+- Size flanges, ears and bases from the fastener (ear width ≥ 2 × 7.9 = 15.8 for one M4 countersunk row), not the other way round. Drive the edge offsets with that param.
+- The fillets and chamfers on the outline do not count as material: check the margin after the edge finish.
+- Check numerically after every layout change (centre-to-edge minus head radius); do not judge from a picture.
 
 ## Edges, by print direction
 - Edges horizontal to the bed get a chamfer whose overhang is < 40°.
@@ -93,6 +145,9 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - Migrating: build the new body next to the old one inside one transaction, compare the shapes (symmetric-difference volume), then swap the references and delete the old body. Delete the old body first if you want clean object Names.
 - Test the parametrisation: set several smaller and larger sizes in a transaction, check one valid solid, holes clear, `chk()` and that the bbox equals the derived length, then abort.
 - API traps:
+  - **Deleting objects that use the sheet crashes FreeCAD 26.3 (RC1 and RC2).** If an object with expressions referencing `params` (feature, sketch, datum, link or whole Body) is deleted, the next change of a sheet cell segfaults in `Document::recompute` → `DocumentObject::enforceRecompute`, even when a recompute ran in between and even when the whole Body is deleted. Reproduced without fdmkit and without addons (2026-10-18). Workaround that works: clear every expression of the objects to be deleted (`for p, e in list(o.ExpressionEngine): o.setExpression(p, None)`), recompute, then delete. To rebuild a part, build it in a new Body, relink the users, clear the old Body's expressions, then delete it.
+  - A Body's `BaseFeature` taken from another Body uses that Body's global placement and is not recomputed when the source moves through expressions (it went stale and collided). Build the variant as its own Body from the same params instead.
+  - `Spreadsheet.removeRows()` shifts the cells but leaves stale computed values: dependent cells and features then recompute with old numbers (seen 2026-10-18: `drum_y0` −168.8 instead of −138). After removing or inserting rows, touch every used cell (`sheet.touchCells(c)`), `sheet.recompute()`, `doc.recompute()`, and re-read a few derived values before saving.
   - `Spreadsheet.clearAll()` is not undone by `abortTransaction`; rewrite and clear cells one by one.
   - A PartDesign pattern created from Python does not become the Tip; set `body.Tip` to it.
   - A Hole needs its base recomputed before its properties are set.
@@ -126,7 +181,46 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - Consider ABS or ASA only above ~55 °C, and only with an enclosure.
 
 ## Pictures and renders
+- Pictures of a model or assembly come only from FreeCAD's standard image export of the user's real document: `View3D.saveImage` of that document's own 3D view (or File → Export image), with a white background. Set the camera through `fdmkit.run(expr)` and restore it afterwards.
+  - Never generate a scene yourself: no copied shapes, temporary documents, re-placed or re-coloured parts, and no compositing, added shadows or cropping into the part. The image must show the model exactly as it is in the document.
+  - FEM deflection plots are the only exception, since FreeCAD has no standard export for them.
 - Plain white background, pastel colours, no scale bars, captions or numbers on the image. The numbers go in the README or the chat.
 - To show loads: colour by deflection (|u|, normalised per load case), use a scaled deformation over a grey outline of the unloaded part, and draw the load arrows.
   - Pick the scale per case so the largest displacement draws at about 20 mm.
 - Stories are 1080×1920. Render with VTK from FreeCAD's bundled Python.
+
+## Animations and exploded views (2026-10-20)
+Proven on the roller stand (`roller-stand/renders/roller_stand_exploded_reel.mp4`, 15 s Reels loop).
+- Tool: i10g (Inbetweening). A step stores the placement, visibility and colour of every `App::Link`/`App::Part`; i10g interpolates linearly between steps and streams `View3D.saveImage` frames of the document's own view into ffmpeg. Joint motion (rotating shafts, lifts) comes from Assembly Simulation instead.
+- Required local patches of i10g (lost on an Addon Manager update; re-apply):
+  - FreeCAD 26 links have `ShapeAppearance` instead of `ShapeMaterial`; without `tools/patches/i10g-shapeappearance.patch` the first step fails with `'Gui.ViewProviderLink' object has no attribute 'ShapeMaterial'`. Apply it in `Mod/Inbetweening` with `patch -p1 < .../fdmkit/tools/patches/i10g-shapeappearance.patch`, then `importlib.reload(i10g)`.
+  - macOS video export: frames go to ffmpeg's stdin, ffmpeg found in `/opt/homebrew/bin` (already in the installed copy).
+- Procedure:
+  1. Plan the stages as translation offsets per link (cumulative: stage k holds everything stage k−1 moved). Explode along the real assembly direction: purchased stacks along their axis in assembly order with a fixed gap, parts lifted off in the order a person would take them off. For a portrait 9:16 video, stack the levels vertically (e.g. drum +300, shafts +150, carriages +60), so the exploded view is tall, not long.
+  2. `freeze_all()` before moving anything. It freezes everything except links, parts and groups: the Assembly cannot solve the links back, and i10g's forced `recompute(None, True, True)` after the render takes milliseconds instead of minutes.
+  3. Record the steps in one call: set the stage placements, `i10g.Animation(None)` (records step 0), then `addStep()` for each next state. Loop for social media: `0, 0, 1, …, n, n, n−1, …, 0`. `DurationInSeconds` is an integer and is the time from that step to the next (holds = two equal steps). Set `OutputFilename` (in the project's `renders/`), `CustomResolution` `1080x1920`, `Background` `White`, `FPS` 30. End the call with the links back in the assembled state: run() autosaves on commit.
+  4. Camera: perspective, a fixed view direction, `fitAll()` on the fully exploded state, then zoom only through `heightAngle`. NaviCube off. Check the exploded frame's content bbox in pixels (≥ 5 % margin each side) before rendering.
+  5. `i10g_video()` drops hidden links from every step (i10g would show them with transparency 1 and their edges would float), checks the patch, and starts the render through a `QTimer` so the RPC returns at once. Wait for the ffmpeg process to exit (Bash `run_in_background` with `until ! pgrep -f "ffmpeg.*<name>"`), and do not send fdmkit calls meanwhile.
+  6. Check: `ffprobe` (size, fps, frames), a contact sheet of 6–7 frames across the video.
+  7. Restore: `thaw_all()`, `full()`, NaviCube back, draw style `As is` (i10g leaves "Flat Lines"), orthographic axonometric view, Fit All. Keep the `Animation` object for a re-render; record it in the project AGENTS.md.
+- Known limits: i10g renders in the "Shaded" draw style (no edge lines); interpolation is linear (no easing); steps store absolute placements, so record them again after any assembly change.
+
+## Speed with big documents (user rule, 2026-10-19)
+The user waits for every call; slow work is a defect. A full recompute of a document with an Assembly re-solves every joint against heavy shapes (tray, drum, 72-tooth gears) and takes minutes.
+- `focus('Body', ...)` before editing parts: fdmkit then recomputes only those Bodies and the params sheet. `full()` once at the end recomputes everything and solves the Assembly.
+- Read-only questions start with `?` (`?expr`): no transaction, no rollback recompute, no autosave. Never use `raise Exception(data)` to read: the abort triggers a recompute.
+- Both `?expr` and normal calls see the fdmkit calls plus `App` and `Gui`; other modules need an `import` statement in the call (a normal call may hold several statements; the last expression is the result).
+- `freeze('StandAssembly', 'Tray', ...)` (Std_ToggleFreeze) for heavy objects that the current step does not change: gears, belts, purchased STEP parts, reference bodies, the Assembly while parts are edited. `thaw()` them before the final check. `freeze('StandAssembly')` freezes only the Assembly and its joint groups, not the linked Bodies; `freeze_all()` / `thaw_all()` freeze or thaw every non-link object (animations, view-only work).
+- Batch a whole part edit in one call (sketch changes, features, probes). Split only where a rule demands it (delete: clear expressions, then delete in a separate call). Prefer `Suppressed = True` over deleting a feature: no second call, no crash risk.
+- Recompute one object or Body with `d.recompute([objs])`, not `d.recompute()`, in raw code.
+- Interference and clearance checks: bounding-box prefilter first; `common()`/`distToShape()` only on pairs that overlap; one lift position per call; skip tray/drum pairs whose relative position does not change with the lift.
+- Heavy loops (tessellated overhang scans, 4 rotations of a teardrop) on gear bodies: one evaluation per call, not a sweep.
+- Do not touch the 3D view while a call runs: a held mouse button blocks the GUI queue (`mouse buttons held`). If a call times out, wait for it (a background `sleep`) instead of sending more calls.
+- Never send a call while a previous one is still running in FreeCAD; check with a cheap `?` read first.
+
+## Design stage: minimal recomputes (user rule, 2026-10-19)
+1. Numbers first: settle a layout (lengths, clearances, heights, belts) with params formulas and short calculations, show the table, get the user's OK, then model.
+2. Light stand-ins while designing: pulleys as pitch-diameter cylinders, motors as boxes, the tray as a simple drafted box. Swap in real gears, STEP parts and belts only for the final check.
+3. The Assembly stays frozen while parts change; `focus()` the edited Bodies; thaw and solve once per stage.
+4. Heavy checks (all-pairs interference, overhang scans) only at the end of a stage or on request; between steps use formula clearances and a few `isInside` probes.
+5. One part edit per call; `Suppressed` instead of deleting; delete what is no longer needed so the document stays small.

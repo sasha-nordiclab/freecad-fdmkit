@@ -18,7 +18,8 @@ __version__ = '0.2.0'
 __all__ = ['new', 'P', 'plane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
            'half', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'polar', 'mirror', 'move',
            'dim', 'chk', 'why', 'tree',
-           'undo', 'selftest']
+           'undo', 'selftest', 'focus', 'full', 'freeze', 'thaw',
+           'freeze_all', 'thaw_all', 'i10g_video']
 
 V = App.Vector
 C = Sketcher.Constraint
@@ -155,8 +156,8 @@ def P(*names, **values):
             s.set(cell, _cell(v))
     if values:
         d = _doc()
-        d.recompute()
-        bad = [o for o in d.Objects if _bad(o)]
+        _rc(d)
+        bad = [o for o in _scope(d) if _bad(o)]
         if bad:
             raise FdmkitError('P: ' + '; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
     keys = names or (values.keys() if values else al.keys())
@@ -214,7 +215,7 @@ def plane(name, base='XY', offset=0):
     pl.AttachmentOffset = App.Placement(V(0, 0, _val(pl, offset)), App.Rotation())
     if isinstance(offset, str):
         pl.setExpression('.AttachmentOffset.Base.z', _expr(offset))
-    pl.Document.recompute()
+    _rc(pl.Document)
     if _bad(pl):
         raise FdmkitError(f'{name}: {pl.getStatusString()}')
     return f'{name}: OK z {_num(pl.Placement.Base.z)}'
@@ -230,7 +231,7 @@ def sk(name, on='XY'):
     s = b.newObject('Sketcher::SketchObject', name)
     s.AttachmentSupport = [(ref, '')]
     s.MapMode = 'FlatFace'
-    s.Document.recompute()
+    _rc(s.Document)
     return f'{name}: OK on {on}'
 
 
@@ -301,7 +302,7 @@ def _sk_clash(s):
 
 
 def _sk_done(s, label):
-    s.Document.recompute()
+    _rc(s.Document)
     err = _sk_issue(s)
     if err:
         raise FdmkitError(f'{s.Name}.{label}: {err}')
@@ -414,7 +415,7 @@ def dim(sketch, cname, value):
     else:
         s.setExpression('Constraints.' + cname, None)
         s.setDatum(i, float(value))
-    s.Document.recompute()
+    _rc(s.Document)
     r = chk()
     if r.startswith('ERR'):
         raise FdmkitError(r[4:])
@@ -667,7 +668,7 @@ def _feature(kind, name, sketch):
 
 def _finish(f, s):
     prev = f.BaseFeature
-    f.Document.recompute()
+    _rc(f.Document)
     bad = [o for o in (s, f) if _bad(o)]
     if bad:
         raise FdmkitError('; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
@@ -755,7 +756,7 @@ def hole(sketch, diameter, depth='through', name=None, start='profile',
          model_thread=False, cosmetic_thread=True, operation='subtract'):
     """PartDesign Hole on fully constrained circle centres; cosmetic thread is metadata."""
     f, s = _feature('PartDesign::Hole', name, sketch)
-    f.Document.recompute()  # Hole populates its dynamic properties after a base recompute.
+    _rc(f.Document)  # Hole populates its dynamic properties after a base recompute.
     _setq(f, 'Diameter', diameter)
     if depth == 'through':
         f.DepthType = 'ThroughAll'
@@ -841,7 +842,7 @@ def polar(features, occurrences, axis='Z', angle=360, suppressed=(), name=None):
     if suppressed:
         _need(f, 'SuppressedIndices')
         f.SuppressedIndices = sorted(set(suppressed))
-    f.Document.recompute()
+    _rc(f.Document)
     if _bad(f) or f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
         raise FdmkitError(f'{f.Name}: {f.getStatusString()} solids {len(f.Shape.Solids)}')
     for o in fs:
@@ -858,7 +859,7 @@ def move(feature, after):
     b.insertObject(f, t, True)
     if tip_last:
         b.Tip = _solid_tail(b)
-    f.Document.recompute()
+    _rc(f.Document)
     bad = [o for o in b.Group if _bad(o)]
     if bad:
         raise FdmkitError('move: ' + '; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
@@ -882,7 +883,7 @@ def mirror(features, plane='XY', name=None):
         b.removeObject(m)
         b.insertObject(m, last, True)
         b.Tip = _solid_tail(b) if tip_last else b.Tip
-    m.Document.recompute()
+    _rc(m.Document)
     if _bad(m) or not m.Shape.isValid() or len(m.Shape.Solids) != 1:
         raise FdmkitError(f'{m.Name}: {m.getStatusString()} solids {len(m.Shape.Solids)}')
     return f'{m.Name}: OK ' + _shape(m.Shape)
@@ -934,8 +935,202 @@ def undo():
     if not d.UndoCount:
         raise FdmkitError('undo: nothing to undo')
     d.undo()
-    d.recompute()
+    _rc(d)
     return f'undo: OK, {d.UndoCount} left'
+
+
+# ---------------------------------------------------------------- speed
+_focus = {}   # doc name -> list of Body names whose recompute is enough
+
+
+def _rc(d):
+    """Recompute only the focused Bodies (and the params sheet) when focus() is set,
+    else the whole document. A full recompute also re-solves every Assembly."""
+    names = _focus.get(d.Name)
+    if not names:
+        d.recompute()
+        return
+    objs = []
+    sh = d.getObject(PARAMS)
+    if sh:
+        objs.append(sh)
+    for n in names:
+        b = d.getObject(n)
+        if b is None:
+            continue
+        objs.append(b)
+        objs.extend(o for o in getattr(b, 'Group', []) if not o.TypeId.startswith('App::'))
+    d.recompute(objs)
+
+
+def _scope(d):
+    """Objects whose state matters now: the focused Bodies (+ params), else all."""
+    names = _focus.get(d.Name)
+    if not names:
+        return list(d.Objects)
+    out = [d.getObject(PARAMS)] if d.getObject(PARAMS) else []
+    for n in names:
+        b = d.getObject(n)
+        if b:
+            out.append(b)
+            out.extend(o for o in getattr(b, 'Group', []) if not o.TypeId.startswith('App::'))
+    return out
+
+
+def _fix_joint_refs(d):
+    """Assembly joints that lost their element ('?FaceN') after a part change: point them
+    back at Face1 (the joints here use Detach and explicit placements)."""
+    n = 0
+    for o in d.Objects:
+        for r in ('Reference1', 'Reference2'):
+            ref = getattr(o, r, None)
+            if ref and ref[0] and ref[1] and str(ref[1][0]).startswith('?'):
+                setattr(o, r, (ref[0], ['Face1']))
+                n += 1
+    return n
+
+
+def _show_tips(d):
+    """In every Body show only the Tip feature; hide other features and sketches
+    (a feature inserted mid-tree otherwise stays visible and hides later cuts)."""
+    for b in d.Objects:
+        if b.TypeId != 'PartDesign::Body':
+            continue
+        for o in b.Group:
+            vo = getattr(o, 'ViewObject', None)
+            if vo is None or o.TypeId.startswith('App::'):
+                continue
+            want = o == b.Tip
+            if vo.Visibility != want:
+                vo.Visibility = want
+
+
+def focus(*bodies):
+    """focus('Carriage') - recompute only these Bodies (+ params) until full().
+    Use while editing parts of a big document with an Assembly."""
+    d = _doc()
+    miss = [n for n in bodies if d.getObject(n) is None]
+    if miss:
+        raise FdmkitError(f'focus: no {miss}')
+    _focus[d.Name] = list(bodies)
+    return f'focus: {", ".join(bodies) or "off"}'
+
+
+def full():
+    """Leave focus, recompute everything and solve every Assembly once."""
+    d = _doc()
+    _focus.pop(d.Name, None)
+    d.recompute()
+    _fix_joint_refs(d)
+    d.recompute()
+    _show_tips(d)
+    out = []
+    for a in d.Objects:
+        if a.TypeId == 'Assembly::AssemblyObject' and hasattr(a, 'solve'):
+            out.append(f'{a.Name} solve {a.solve()}')
+    d.recompute()
+    bad = [o.Name for o in d.Objects if _bad(o)]
+    return 'full: ' + ('; '.join(out) or 'no assembly') + (f'; invalid {bad}' if bad else '; OK')
+
+
+def _toggle_freeze(names, want):
+    import FreeCADGui as Gui
+    d = _doc()
+    objs = []
+    for n in names:
+        o = d.getObject(n)
+        if o is None:
+            raise FdmkitError(f'freeze: no {n}')
+        objs.append(o)
+        objs.extend(x for x in getattr(o, 'Group', []) if not x.TypeId.startswith('App::'))
+    objs = [o for o in objs if ('Freezed' in o.getStatusString()) != want]
+    if objs:
+        Gui.Selection.clearSelection()
+        for o in objs:
+            Gui.Selection.addSelection(o)
+        Gui.runCommand('Std_ToggleFreeze', 0)
+        Gui.Selection.clearSelection()
+    return len(objs)
+
+
+def freeze(*names):
+    """freeze('Tray', 'StandAssembly') - Std_ToggleFreeze: skip heavy objects in recomputes."""
+    return f'freeze: {_toggle_freeze(names, True)} objects'
+
+
+def thaw(*names):
+    """thaw(...) - undo freeze()."""
+    return f'thaw: {_toggle_freeze(names, False)} objects'
+
+
+# Objects that carry no geometry to recompute; freeze_all() leaves them alone so
+# link placements (animations) and group membership keep working.
+_NO_FREEZE = ('App::Link', 'App::Part', 'App::DocumentObjectGroup',
+              'App::DocumentObjectGroupPython', 'App::Origin', 'App::Line',
+              'App::Plane', 'App::Point')
+
+
+def _set_frozen(objs, want):
+    import FreeCADGui as Gui
+    objs = [o for o in objs if ('Freezed' in o.getStatusString()) != want]
+    if objs:
+        Gui.Selection.clearSelection()
+        for o in objs:
+            Gui.Selection.addSelection(o)
+        Gui.runCommand('Std_ToggleFreeze', 0)
+        Gui.Selection.clearSelection()
+    return len(objs)
+
+
+def freeze_all():
+    """Freeze every object except links, parts and groups: a forced recompute (i10g ends
+    every render with one) then takes milliseconds and the Assembly solver cannot pull
+    moved links back. Undo with thaw_all(), then full()."""
+    d = _doc()
+    n = _set_frozen([o for o in d.Objects if o.TypeId not in _NO_FREEZE], True)
+    return f'freeze_all: {n} objects'
+
+
+def thaw_all():
+    """Thaw every frozen object of the document (marks them touched: run full() next)."""
+    d = _doc()
+    n = _set_frozen([o for o in d.Objects if 'Freezed' in o.getStatusString()], False)
+    return f'thaw_all: {n} objects'
+
+
+def i10g_video(delay_ms=300):
+    """Render the document's i10g Animation to its OutputFilename without blocking the RPC.
+    Drops hidden objects from every step (i10g would show hidden links with transparency 1,
+    leaving their edges floating) and checks the FreeCAD 26 ShapeAppearance patch.
+    Prepare first: steps recorded, camera set, freeze_all(). Wait for ffmpeg to exit."""
+    d = _doc()
+    a = d.getObject('Animation')
+    if a is None or not a.Group:
+        raise FdmkitError('i10g_video: no Animation with steps in this document')
+    try:
+        from freecad.i10g import i10g
+    except ImportError:
+        raise FdmkitError('i10g_video: Inbetweening (i10g) is not installed')
+    if not hasattr(i10g, 'getShapeMaterial'):
+        raise FdmkitError('i10g_video: i10g lacks the FreeCAD 26 ShapeAppearance patch '
+                          '(getShapeMaterial/setShapeMaterial, rules.md "Animations")')
+    hidden = {o.Name for o in d.Objects if o.TypeId == 'App::Link' and not o.Visibility}
+    pruned = 0
+    for s in a.Group:
+        st = s.DocState
+        drop = hidden.intersection(st)
+        if drop:
+            for n in drop:
+                st.pop(n)
+            s.DocState = st
+            pruned += len(drop)
+    anim = i10g.Animation.getInstance()
+    i10g.STATE['animation'] = anim
+    from PySide import QtCore
+    QtCore.QTimer.singleShot(int(delay_ms), anim.video)
+    res = a.CustomResolution or a.Resolution
+    return (f'i10g_video: {len(a.Group)} steps, {anim.getTotalFrames()} frames {res} '
+            f'@{a.FPS} -> {a.OutputFilename}; {pruned} hidden entries dropped')
 
 
 # ---------------------------------------------------------------- entry
@@ -951,15 +1146,39 @@ def _autosave(d):
         _saved[d.Name] = now
 
 
+def _ns():
+    """Namespace of run(): the fdmkit calls plus App and, with a GUI, Gui."""
+    ns = {k: globals()[k] for k in __all__}
+    ns['App'] = App
+    try:
+        import FreeCADGui as Gui
+        ns['Gui'] = Gui
+    except ImportError:
+        pass
+    return ns
+
+
 def run(expr):
     """Run 'a(); b(); c()' as ONE transaction: one result per call, ' ; '-joined.
-    Any failure rolls the whole batch back and names the failing step."""
+    Any failure rolls the whole batch back and names the failing step.
+    '?expr' is read-only: no transaction, no recompute, no autosave."""
+    if expr.lstrip().startswith('?'):
+        try:
+            ns = _ns()
+            body = expr.lstrip()[1:]
+            mod = ast.parse(body)
+            last = mod.body.pop() if mod.body and isinstance(mod.body[-1], ast.Expr) else None
+            exec(compile(mod, '<fdmkit?>', 'exec'), ns)
+            r = eval(compile(ast.Expression(last.value), '<fdmkit?>', 'eval'), ns) if last else None
+            return 'OK' if r is None else str(r)
+        except Exception as e:
+            return f'ERR read: {type(e).__name__}: {e}'
     d = None if re.fullmatch(r'\s*undo\s*\(\s*\)\s*', expr) else App.ActiveDocument
     if d:
         d.openTransaction(expr[:60])
     out, step = [], 0
     try:
-        ns = {k: globals()[k] for k in __all__}
+        ns = _ns()
         for step, node in enumerate(ast.parse(expr).body, 1):
             if isinstance(node, ast.Expr):
                 r = eval(compile(ast.Expression(node.value), '<fdmkit>', 'eval'), ns)
@@ -973,7 +1192,7 @@ def run(expr):
     except Exception as e:
         if d:
             d.abortTransaction()
-            d.recompute()
+            _rc(d)
         msg = str(e) if isinstance(e, FdmkitError) else f'{type(e).__name__}: {e}'
         return f'ERR step {step}: {msg}' + (' (batch rolled back)' if step > 1 else '')
 
@@ -1047,6 +1266,17 @@ def selftest():
         ck('undo', "undo()", lambda r: d.getObject('pocket') is None)
         ck('dim', "dim('outline', 'r1_w', 'width + 2')", lambda r: 'bb 42.0x' in r)
         ck('chk', "chk()", lambda r: r.startswith('OK'))
+        ck('ns_read', "?(App.ActiveDocument.Name, 'Gui' in globals())",
+           lambda r: d.Name in r and 'True' in r)
+        ck('ns_write', "App.ActiveDocument.Name", lambda r: r == d.Name)
+        ck('freeze_all', "freeze_all()",
+           lambda r: r.startswith('freeze_all:') and int(r.split()[1]) > 0
+           and 'Freezed' in d.getObject(PARAMS).getStatusString())
+        ck('thaw_all', "thaw_all()",
+           lambda r: r.startswith('thaw_all:')
+           and not any('Freezed' in o.getStatusString() for o in d.Objects))
+        ck('i10g_video', "i10g_video()",
+           lambda r: r.startswith('ERR') and 'no Animation' in r)
         d2 = App.newDocument('fdmkit_263_features', 'fdmkit_263_features', True, True)
         try:
             App.setActiveDocument(d2.Name)

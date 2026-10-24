@@ -103,8 +103,14 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `dim(sk, 'r1_w', val)` | Change one named sketch dimension |
 | `chk()` / `why(name)` / `tree()` | Checks, one failure explained, feature tree |
 | `undo()` | Undo the last batch |
+| `focus(body, ...)` / `full()` | Recompute only these Bodies until `full()`, which recomputes everything and solves every Assembly |
+| `freeze(name, ...)` / `thaw(name, ...)` | Std_ToggleFreeze on heavy objects (Assembly, gears, STEP parts) |
+| `freeze_all()` / `thaw_all()` | Freeze or thaw every object except links, parts and groups (animations, view-only work) |
+| `i10g_video(delay_ms=300)` | Render the document's Inbetweening (i10g) `Animation` to its output file without blocking the call; hidden links are dropped from the steps |
 
 Lengths and angles take a number, a parameter name or an expression such as `'wall*2'`.
+
+A call that starts with `?` is read-only: no transaction, no recompute, no autosave. Both kinds of call see the functions above plus `App` and `Gui`; import other modules inside the call.
 
 For the 26.3 start modes, use `start='offset', offset='wall'` or `start='reference', reference='top_plane'`. References must be origin or datum planes. `hole` accepts FreeCAD thread type and size names reported by that build; a cosmetic thread is metadata/visualization and does not appear as helical STL geometry. `polar` counts the original as one occurrence. Unsupported 26.3 properties fail with a clear error instead of silently changing the model.
 
@@ -116,6 +122,7 @@ fdmkit runs code in FreeCAD through the addon's XML-RPC server, and the copy it 
 
 - Changing a spreadsheet cell that is referenced by its alias does not update the model. fdmkit installs a document observer that marks the sheet's dependents as changed.
 - With a decimal-comma locale, numbers written to the spreadsheet are stored as formulas (`'=40.5'`).
+- Link view providers have `ShapeAppearance` instead of `ShapeMaterial`, which breaks the Inbetweening (i10g) animation workbench. Apply `tools/patches/i10g-shapeappearance.patch` in its `Mod/Inbetweening` folder (`patch -p1 < ...`); `i10g_video()` checks for it.
 - FreeCAD rejects unit names (`h`, `m`, `s`, `g`, `l`, `t`, `mm`, `deg`, `in`, ...) as aliases, so parameters cannot be called that.
 
 ## License

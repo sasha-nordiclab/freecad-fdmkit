@@ -10,7 +10,7 @@ ORCA = '/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer'
 USER = pathlib.Path.home() / 'Library/Application Support/OrcaSlicer/user/default'
 SYS = pathlib.Path('/Applications/OrcaSlicer.app/Contents/Resources/profiles/BBL')
 MACHINE = os.environ.get('ORCA_MACHINE', 'Bambu Lab A1 0.4 nozzle - NordicLab')
-FILAMENT = os.environ.get('ORCA_FILAMENT', 'AzureFilm PETG HF')
+FILAMENT = os.environ.get('ORCA_FILAMENT', 'AzureFilm PETG HF White')
 PROCESS = '0.20mm NordicLab 0.6 Ballance'
 
 

@@ -6,6 +6,7 @@ The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger
 - Mesh: `…/FreeCAD.app/Contents/Resources/bin/gmsh part.step -3 -order 2 -setnumber Mesh.SecondOrderLinear 1 -clmax 2.5 -clmin 1.0 -format inp`.
   - Without `SecondOrderLinear 1`, curved C3D10 elements fail with "nonpositive jacobian".
 - Solve: `…/bin/ccx`, linear static, one STEP per load case.
+- Time budget (user rule: slowness is a defect): a contact solve on 114 k nodes / 70 k C3D10 took 72 min. Screen designs with `-clmax 4.5 -clmin 1.5` (≈ 3× fewer nodes), run ccx in the background, and refine only the final variant around the peak. Tell the user the expected run time before starting.
 - Put temporary STEP and mesh files only in the scratchpad and delete them afterwards. Never write them into the project unless asked.
 - Ask before exporting anything. Do not mesh with chamfers ≤ 0.5 mm, because they make the mesh many times heavier; say so in the report.
 
