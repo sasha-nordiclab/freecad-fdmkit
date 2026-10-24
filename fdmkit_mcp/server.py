@@ -32,6 +32,12 @@ those Bodies + params until full(); full() = one recompute + Assembly solve.
 freeze('Name',...) / thaw(...) = Std_ToggleFreeze heavy objects (Assembly, gears, STEP).
 freeze_all() / thaw_all() = every non-link object (animations); then full().
 i10g_video() = render the i10g Animation async (hidden links dropped); wait for ffmpeg.
+CHECK: check() = whole document: one valid solid per Body, no errors, DoF 0, no Body
+intersections, every Fasteners object on a hole axis | lint() = traps: hole sketch tangent
+to a cylinder, countersink apex on the hole floor, sketches placed by plain numbers,
+cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set,
+check(), restore (stress test) | sel() = GUI selection + distance | reopen() = save,
+close, open, recompute. TechDraw: SVG export only (exportPageAsPdf crashes 26.3).
 Namespace: fdmkit calls + App + Gui; import other modules inside the call.
 Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l...
 RULE symmetry: parts are often mirrored pairs (Module_A/Module_B) or symmetric about a
@@ -109,7 +115,15 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
     explode and take minutes), fixed perspective camera fitted on the exploded state,
     NaviCube off, i10g_video() async, wait for ffmpeg, check frames, then thaw_all(),
     full() and restore the view. i10g on FreeCAD 26 needs the ShapeAppearance patch
-    (tools/patches/i10g-shapeappearance.patch); re-apply after addon updates."""
+    (tools/patches/i10g-shapeappearance.patch); re-apply after addon updates.
+17. After every model change: reopen(), check(), lint(). Before handing a parametric model
+    over, run case() on its main drivers. Reference every feature to a real datum (a part
+    face, flange, top or bottom of the part, a pattern row) through params, never to an
+    absolute Z: when the parent grows, absolute features stay behind. Radial hole sketches
+    sit 1 mm outside the cylinder (tangent planes make OCC drop holes at random).
+18. Reverse engineering from the user's caliper measurements (rules.md "Measured
+    reverse engineering"): ignore 0.1-0.2 mm deviations, prefer assembled stack checks
+    between two selected faces (sel()), change the model where several checks agree."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},

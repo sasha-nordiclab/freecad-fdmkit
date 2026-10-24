@@ -17,7 +17,7 @@ import Sketcher
 __version__ = '0.2.0'
 __all__ = ['new', 'P', 'plane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
            'half', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'polar', 'mirror', 'move',
-           'dim', 'chk', 'why', 'tree',
+           'dim', 'chk', 'why', 'tree', 'check', 'lint', 'case', 'sel', 'reopen',
            'undo', 'selftest', 'focus', 'full', 'freeze', 'thaw',
            'freeze_all', 'thaw_all', 'i10g_video']
 
@@ -939,6 +939,218 @@ def undo():
     return f'undo: OK, {d.UndoCount} left'
 
 
+# ---------------------------------------------------------------- model checks
+def _bodies(d):
+    return [o for o in d.Objects if o.TypeId == 'PartDesign::Body' and o.Tip]
+
+
+def _fasteners(d):
+    """Fasteners workbench objects (screws, nuts, washers)."""
+    return [o for o in d.Objects if o.TypeId == 'Part::FeaturePython'
+            and type(getattr(o, 'Proxy', None)).__module__.startswith('Fasteners')]
+
+
+def _line_dist(p, c, n):
+    """Distance from point p to the line through c along unit vector n."""
+    w = p - c
+    return (w - n * w.dot(n)).Length
+
+
+def _off_axis(d, bodies):
+    """Fasteners whose axis runs through no cylindrical face of the given Bodies."""
+    cyl = [(f.Surface.Axis, f.Surface.Center) for b in bodies for f in b.Shape.Faces
+           if f.Surface.TypeId == 'Part::GeomCylinder']
+    out = []
+    for o in _fasteners(d):
+        pl = o.getGlobalPlacement()
+        ax = pl.Rotation.multVec(V(0, 0, 1))
+        dist = [_line_dist(pl.Base, c, a) for a, c in cyl if abs(abs(a.dot(ax)) - 1) < 1e-4]
+        if not dist or min(dist) > 1e-3:
+            out.append(o.Name)
+    return out
+
+
+def check(*bodies):
+    """Whole document: each Body one valid solid, no object in error, sketches at DoF 0,
+    no volume intersection between Bodies, every Fasteners object on a hole axis."""
+    d = _doc()
+    bs = [_obj(n) for n in bodies] if bodies else _bodies(d)
+    issues = []
+    for b in bs:
+        s = b.Shape
+        if s.isNull() or not s.isValid() or len(s.Solids) != 1:
+            issues.append(f'{b.Name}: {len(s.Solids)} solids' + ('' if s.isNull() or s.isValid() else ', invalid'))
+    for o in d.Objects:
+        if o.TypeId.startswith('TechDraw'):
+            continue
+        if o.TypeId == 'Sketcher::SketchObject':
+            e = _sk_issue(o)
+            if e:
+                issues.append(f'{o.Name}: {e}')
+        elif _bad(o):
+            issues.append(f'{o.Name}: {o.getStatusString()}')
+    for i, a in enumerate(bs):
+        for b in bs[i + 1:]:
+            if a.Shape.BoundBox.intersect(b.Shape.BoundBox):
+                v = a.Shape.common(b.Shape).Volume
+                if v > 1e-5:
+                    issues.append(f'{a.Name} x {b.Name} {v:.4g} mm3')
+    issues += [f'{n}: off hole axis' for n in _off_axis(d, bs)]
+    if issues:
+        return 'check: ERR ' + '; '.join(issues)
+    return f'check: OK {len(bs)} bodies, {len(_fasteners(d))} fasteners'
+
+
+def _tangent_hole(h):
+    """Name of the cylinder radius a Hole sketch circle sits tangent to, or None."""
+    prof = h.Profile[0] if h.Profile else None
+    base = h.BaseFeature.Shape if h.BaseFeature else None
+    if prof is None or base is None or base.isNull():
+        return None
+    pl = prof.getGlobalPlacement()
+    n = pl.Rotation.multVec(V(0, 0, 1))
+    for g in prof.Geometry:
+        if getattr(g, 'TypeId', '') != 'Part::GeomCircle':
+            continue
+        c = pl.multVec(g.Center)
+        for f in base.Faces:
+            s = f.Surface
+            if s.TypeId == 'Part::GeomCylinder' and abs(s.Axis.dot(n)) < 1e-6 \
+                    and abs(_line_dist(c, s.Center, s.Axis) - s.Radius) < 1e-6:
+                return s.Radius
+    return None
+
+
+def lint():
+    """Traps found in real models: a Hole sketch tangent to a cylinder (OCC drops holes
+    at random), a countersink apex on the hole floor, deactivated sketches placed by
+    plain numbers, expressions reaching into another Body, unused params aliases."""
+    d = _doc()
+    out = []
+    for h in d.Objects:
+        if h.TypeId != 'PartDesign::Hole':
+            continue
+        r = _tangent_hole(h)
+        if r is not None:
+            out.append(f'{h.Name}: sketch tangent to R{r:g}, put it 1 mm outside')
+        if h.HoleCutType == 'Countersink' and h.DepthType == 'Dimension':
+            apex = h.HoleCutDiameter.Value / 2 / math.tan(math.radians(h.HoleCutCountersinkAngle.Value) / 2)
+            if abs(apex - h.Depth.Value) < 1e-6:
+                out.append(f'{h.Name}: countersink apex on the hole floor')
+    for o in d.Objects:
+        if o.TypeId == 'Sketcher::SketchObject' and getattr(o, 'MapMode', '') == 'Deactivated' \
+                and 'Placement' not in dict(o.ExpressionEngine) and o.Placement.Base.Length > 1e-9:
+            out.append(f'{o.Name}: placed by numbers')
+    body_of = {o.Name: o.getParentGeoFeatureGroup() for o in d.Objects
+               if o.getParentGeoFeatureGroup() is not None
+               and o.getParentGeoFeatureGroup().TypeId == 'PartDesign::Body'}
+    for o in d.Objects:
+        own = body_of.get(o.Name)
+        if own is None:
+            continue
+        for prop, e in o.ExpressionEngine:
+            for ref in dict.fromkeys(re.findall(r'(?<![\w.])([A-Za-z_]\w*)\.', e)):
+                other = body_of.get(ref)
+                if other is not None and other != own:
+                    out.append(f'{o.Name}.{prop.lstrip(".")} -> {ref} in {other.Name}')
+    s = _sheet(False, d)
+    if s:
+        used = ' '.join(e for o in d.Objects if o.TypeId != 'Spreadsheet::Sheet' for _, e in o.ExpressionEngine)
+        used += ' ' + ' '.join(sh.getContents(c) for sh in d.Objects if sh.TypeId == 'Spreadsheet::Sheet'
+                               for c in sh.getUsedCells() if sh.getContents(c).startswith('='))
+        out += [f'{s.Name}.{a}: unused' for a in _aliases(s) if not re.search(rf'\b{re.escape(a)}\b', used)]
+    return 'lint: ' + ('; '.join(out) if out else 'OK')
+
+
+def case(name, value, *bodies):
+    """Set one sheet value, check(), restore it: a parametric stress test in one call.
+    name is 'alias' (params) or 'sheet.alias'. TechDraw pages pause updating meanwhile."""
+    d = _doc()
+    sheet, alias = name.split('.', 1) if '.' in name else (PARAMS, name)
+    sh = _sheet(False, d) if sheet == PARAMS else _obj(sheet)
+    cell = _aliases(sh).get(alias) if sh else None
+    if cell is None:
+        raise FdmkitError(f'case: {name} not found')
+    old = sh.getContents(cell)
+    pages = [p for p in d.Objects if p.TypeId == 'TechDraw::DrawPage' and p.KeepUpdated]
+    for p in pages:
+        p.KeepUpdated = False
+    try:
+        sh.set(cell, _cell(value))
+        sh.recompute()
+        d.recompute()
+        r = check(*bodies)
+    finally:
+        sh.set(cell, old)
+        sh.recompute()
+        d.recompute()
+        for p in pages:
+            p.KeepUpdated = True
+    return f'case {name}={value}: ' + r.split(': ', 1)[1]
+
+
+def _describe(sh):
+    if sh.ShapeType == 'Vertex':
+        p = sh.Point
+        return f'vertex ({p.x:.4g}, {p.y:.4g}, {p.z:.4g})'
+    if sh.ShapeType == 'Face':
+        s = sh.Surface
+        if s.TypeId == 'Part::GeomPlane':
+            n = sh.normalAt(0, 0)
+            if abs(abs(n.z) - 1) < 1e-9:
+                return f'plane Z {sh.BoundBox.ZMin:.4g}'
+            return f'plane n({n.x:.3g}, {n.y:.3g}, {n.z:.3g})'
+        if hasattr(s, 'Radius'):
+            return f'{s.TypeId[10:].lower()} R{s.Radius:.4g} Z {sh.BoundBox.ZMin:.4g}..{sh.BoundBox.ZMax:.4g}'
+        return s.TypeId[10:].lower()
+    if sh.ShapeType == 'Edge':
+        c = sh.Curve
+        if hasattr(c, 'Radius'):
+            return f'circle R{c.Radius:.4g} at ({c.Center.x:.4g}, {c.Center.y:.4g}, {c.Center.z:.4g})'
+        return f'edge L{sh.Length:.4g}'
+    return sh.ShapeType
+
+
+def sel():
+    """What is selected in the GUI and, for two items, the distance between them."""
+    import FreeCADGui as Gui
+    items, shapes = [], []
+    for s in Gui.Selection.getSelectionEx('', 0):
+        for sub in s.SubElementNames:
+            sh = s.Object.getSubObject(sub)
+            if sh is None or sh.isNull():
+                continue
+            shapes.append(sh)
+            leaf = sub.split('.')[-1] or sub
+            items.append(f'{s.Object.Name}.{leaf} {_describe(sh)}')
+    if not items:
+        return 'sel: nothing selected'
+    if len(shapes) == 2:
+        a, b = shapes
+        dist = a.distToShape(b)[0]
+        if all(x.ShapeType == 'Face' and x.Surface.TypeId == 'Part::GeomPlane' for x in shapes):
+            na = a.normalAt(0, 0)
+            if abs(abs(na.dot(b.normalAt(0, 0))) - 1) < 1e-9:
+                dist = abs((b.Vertexes[0].Point - a.Vertexes[0].Point).dot(na))
+        items.append(f'distance {dist:.4g}')
+    return ' | '.join(items)
+
+
+def reopen(hidden=False):
+    """Save, close and reopen the active document, then recompute it."""
+    d = _doc()
+    fn = d.FileName
+    if not fn:
+        raise FdmkitError('reopen: the document has no file')
+    d.save()
+    App.closeDocument(d.Name)
+    nd = App.openDocument(fn, hidden)
+    App.setActiveDocument(nd.Name)
+    nd.recompute()
+    bad = [o.Name for o in nd.Objects if _bad(o)]
+    return f'reopen: OK {nd.Name}' + (', errors ' + ','.join(bad) if bad else '')
+
+
 # ---------------------------------------------------------------- speed
 _focus = {}   # doc name -> list of Body names whose recompute is enough
 
@@ -1158,10 +1370,21 @@ def _ns():
     return ns
 
 
+def _alive(d):
+    """False once the document was closed inside the call (reopen())."""
+    try:
+        d.Name
+        return True
+    except Exception:
+        return False
+
+
 def run(expr):
     """Run 'a(); b(); c()' as ONE transaction: one result per call, ' ; '-joined.
     Any failure rolls the whole batch back and names the failing step.
     '?expr' is read-only: no transaction, no recompute, no autosave."""
+    if 'exportPageAsPdf' in expr:
+        return 'ERR exportPageAsPdf crashes FreeCAD 26.3; use TechDrawGui.exportPageAsSvg'
     if expr.lstrip().startswith('?'):
         try:
             ns = _ns()
@@ -1185,12 +1408,12 @@ def run(expr):
                 out.append('OK' if r is None else str(r))
             else:
                 exec(compile(ast.Module([node], []), '<fdmkit>', 'exec'), ns)
-        if d:
+        if d and _alive(d):
             d.commitTransaction()
             _autosave(d)
         return ' ; '.join(out) or 'OK'
     except Exception as e:
-        if d:
+        if d and _alive(d):
             d.abortTransaction()
             _rc(d)
         msg = str(e) if isinstance(e, FdmkitError) else f'{type(e).__name__}: {e}'
@@ -1336,6 +1559,45 @@ def selftest():
             ck('chk_existing_helpers', "chk()", lambda r: r.startswith('OK'))
         finally:
             App.closeDocument(d4.Name)
+            App.setActiveDocument(d.Name)
+        d5 = App.newDocument('fdmkit_checks', 'fdmkit_checks', True, True)
+        live = d5.Name
+        try:
+            import os
+            import tempfile
+            App.setActiveDocument(d5.Name)
+            _init(d5)
+            ck('check_base', "P(blk=20, blk_h=10); sk('blk_sk','XY'); rect('blk_sk','blk','blk'); "
+               "pad('blk_sk','blk_h')", lambda r: 'bb 20.0x20.0x10.0' in r)
+            ck('check', "check()", lambda r: r.startswith('check: OK 1 bodies'))
+            ck('case', "case('blk_h', 14)",
+               lambda r: r.startswith('case blk_h=14: OK')
+               and abs(d5.getObject('pad').Shape.BoundBox.ZLength - 10) < 1e-6)
+            ck('lint_ok', "lint()", lambda r: r == 'lint: OK')
+            ck('lint_traps', "plane('blk_top','XY','blk_h'); sk('csk_sk','blk_top'); circ('csk_sk',3); "
+               "hole('csk_sk',3,depth=3); h=App.ActiveDocument.getObject('hole'); "
+               "h.HoleCutType='Countersink'; h.HoleCutCountersinkAngle=90; h.HoleCutDiameter=6; "
+               "s=App.ActiveDocument.getObject('blk_sk'); s.MapMode='Deactivated'; "
+               "s.Placement=App.Placement(App.Vector(0,0,0.5),App.Rotation()); App.ActiveDocument.recompute(); lint()",
+               lambda r: 'countersink apex' in r and 'blk_sk: placed by numbers' in r)
+            pad_ = d5.getObject('pad')
+            zf = {round(f.BoundBox.ZMin, 6): i for i, f in enumerate(pad_.Shape.Faces, 1)
+                  if f.Surface.TypeId == 'Part::GeomPlane' and abs(f.BoundBox.ZLength) < 1e-9}
+            import FreeCADGui as Gui
+            Gui.Selection.clearSelection()
+            b5 = _body(d5)
+            for z in (min(zf), max(zf)):
+                Gui.Selection.addSelection(d5.Name, b5.Name, f'{pad_.Name}.Face{zf[z]}')
+            ck('sel', "?sel()", lambda r: 'distance 10.5' in r or 'distance 10' in r)
+            Gui.Selection.clearSelection()
+            ck('pdf_guard', "?TechDrawGui.exportPageAsPdf", lambda r: 'crashes' in r)
+            fn = os.path.join(tempfile.mkdtemp(prefix='fdmkit_'), 'fdmkit_checks.FCStd')
+            d5.saveAs(fn)
+            ck('reopen', "reopen(True)", lambda r: r.startswith('reopen: OK'))
+            live = App.ActiveDocument.Name
+        finally:
+            if live in App.listDocuments():
+                App.closeDocument(live)
             App.setActiveDocument(d.Name)
     finally:
         App.closeDocument(d.Name)

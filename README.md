@@ -107,6 +107,11 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `freeze(name, ...)` / `thaw(name, ...)` | Std_ToggleFreeze on heavy objects (Assembly, gears, STEP parts) |
 | `freeze_all()` / `thaw_all()` | Freeze or thaw every object except links, parts and groups (animations, view-only work) |
 | `i10g_video(delay_ms=300)` | Render the document's Inbetweening (i10g) `Animation` to its output file without blocking the call; hidden links are dropped from the steps |
+| `check(*bodies)` | Whole document: one valid solid per Body, no object in error, sketches at DoF 0, no volume intersection between Bodies, every Fasteners object on a hole axis |
+| `lint()` | Known traps: Hole sketch tangent to a cylinder, countersink apex on the hole floor, deactivated sketches placed by plain numbers, expressions that reach into another Body, unused params aliases |
+| `case('alias' or 'sheet.alias', value)` | Parametric stress test: set the value, `check()`, restore it (TechDraw pages paused meanwhile) |
+| `sel()` | The GUI selection (planes, cylinders, circles, vertices) and the distance between two selected items |
+| `reopen()` | Save, close, reopen and recompute the active document |
 
 Lengths and angles take a number, a parameter name or an expression such as `'wall*2'`.
 
