@@ -15,6 +15,8 @@ The user watches the model in the GUI. Reply only with OK, the errors or the num
 - For holes use `hole(sk,diameter,depth='through')`. `thread_type='ISOMetricProfile'` with `cosmetic_thread=True` stores thread metadata but does not create printable turns. Use `model_thread=True` only when real thread geometry is needed and verify the mesh.
 - `pocket`, `groove` and `hole` accept `operation='common'` to retain the intersection. `polar(features,occurrences,axis='Z',suppressed=(...))` uses zero-based instance indices, counting the original.
 - On ERR call `why(name)`; when in doubt use `tree()` and `chk()`. Undo with `undo()`.
+- After every model change: `reopen()`, `check()` (whole document: solids, errors, DoF, Body intersections, screws on hole axes) and `lint()` (tangent hole sketches, countersink apex on the hole floor, sketches placed by numbers, cross-Body refs, unused params). Stress-test a parametric model with `case('alias', value)`. When the user selected faces, read them with `sel()`.
+- Reference every feature to a real datum through params, never to an absolute Z (rules.md, "Feature order and checks"). For reverse engineering from caliper measurements, follow rules.md "Measured reverse engineering".
 - Before deleting anything that uses `params` in an expression, clear its expressions and recompute; otherwise the next sheet change segfaults FreeCAD 26.3 (rules.md, API traps).
 - Load `rules.md` (next to this file) before choosing walls, clearances, holes, overhangs, print orientation, materials or renders.
 - Load `fem.md` before any strength check, load analysis, lightening or reinforcement.

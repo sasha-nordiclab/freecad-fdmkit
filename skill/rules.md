@@ -38,7 +38,7 @@ Use FreeCAD's own tools and workbenches instead of hand-made scripts or geometry
 | AddonManager | installing a missing workbench, only after the user agrees | — |
 | Start, Help, Web, Show, Test, Tux, PieMenu, OpenTheme, FreeCADMCP | UI and infrastructure (FreeCADMCP is fdmkit's RPC); do not change them | — |
 
-- Do not position or animate parts with Placement expressions on links or Bodies; that is the Assembly workbench's job.
+- Do not position or animate parts with Placement expressions on links or Bodies; that is the Assembly workbench's job. Fasteners workbench screws in a document without an Assembly are the exception: drive each screw's Placement by an expression of the same params as its hole, so it follows the hole (`check()` verifies every screw sits on a hole axis).
 - In Assembly joints, set `Detach1`/`Detach2` and give `Placement1`/`Placement2` explicitly, driven by `params` expressions, so the joints do not depend on OCC face orientation. A Distance joint driven by a parameter gives a deterministic position for a slider; suppress it to run the slider's Simulation.
 - Simulation motion formulas for Revolute joints are in radians (`2*pi*time` = 1 rev/s).
 - Animations and exploded-view videos: use ExplodedAssembly, i10g or Animate (plus Assembly Simulation for joint motion) instead of a hand-written placement loop; the procedure is in "Animations and exploded views" below.
@@ -66,7 +66,8 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 
 ## Holes and slots
 - A hole or slot whose top would be an arch gets a teardrop or diamond top (sides ≤ 35–40°).
-- A radial Hole into a cylinder: put its sketch 1 mm outside the surface (and add 1 mm to the depth). A sketch plane tangent to the cylinder makes the FusedFilamentDesign teardrop pocket an invalid shape.
+- A radial Hole into a cylinder: put its sketch 1 mm outside the surface (and add 1 mm to the depth). A sketch plane tangent to the cylinder makes the FusedFilamentDesign teardrop pocket an invalid shape, and it makes a plain PartDesign Hole drop some of its holes at random: one boolean fails silently, the part stays "valid", and a later recompute brings the hole back or loses another (ORWO 828, 2026-10-24). Drive the standoff by a param; the countersink diameter on the sketch plane is then `csk_d + 2 · standoff · tan(angle / 2)`, so the countersink at the surface stays `csk_d`. `lint()` reports tangent hole sketches.
+- A countersink whose apex lands exactly on the hole floor (90°, `HoleCutDiameter / 2 == Depth`) is the same kind of degenerate boolean: make the depth `max(wall, csk_d / 2) + allowance`. `lint()` reports it.
 - Horizontal cavities (bores behind bearings, seats in horizontal tubes) trap splash water: add a drain/vent hole at the lowest point and keep crush ribs off that spot.
 - Round ends are fine at the bottom of a void. Plain hex-nut pockets print fine as they are.
 - An annular groove on a vertical face cannot print. Use a recess without an island, or move the groove to the face that is up in print.
@@ -136,6 +137,9 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
   - Add new features after the chamfer, or reselect the chamfer edges geometrically.
 - Labels: no A/B or version prefixes. FreeCAD object Names cannot be renamed, so set clean Labels.
 - Save the document after each confirmed change. `run()` autosaves every 5 minutes.
+- After every model change: `reopen()` (save, close, open, recompute), then `check()` and `lint()`. `check()` covers the whole document: one valid solid per Body, no object in error, sketches at DoF 0, no volume intersection between Bodies, and every Fasteners screw on a hole axis. Also count the holes you expect: a silently dropped hole leaves a valid solid.
+- Before handing over a parametric model, run `case('alias', value)` on each main driver (part lengths, diameters, depths, angular datums). It sets the value, runs `check()` and restores the value. It pauses TechDraw pages meanwhile, because their HLR recompute is slow.
+- Reference every feature to the real datum it is measured from (a part face, a flange top, the part's top or bottom face, a pattern row) through params. Never use an absolute Z or a number copied from another feature. When a parent part changes (an insert lengthened at the bottom), absolute features stay behind; on ORWO 828 a hole and a window sat 0.5 to 8.8 mm off for this reason. Expressions that read another Body's sketch constraints are fragile too: route the value through a sheet (`lint()` lists them).
 
 ## Making a part parametric (for other sizes)
 - Put a few driver params at the top of `params` (the size of the thing the part holds). Under them go build, mount and lightening params, then a "Derived" block of formulas. Sketch dimensions reference only these cells.
@@ -188,6 +192,25 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - To show loads: colour by deflection (|u|, normalised per load case), use a scaled deformation over a grey outline of the unloaded part, and draw the load arrows.
   - Pick the scale per case so the largest displacement draws at about 20 mm.
 - Stories are 1080×1920. Render with VTK from FreeCAD's bundled Python.
+
+## Measured reverse engineering (user rule, 2026-10-24)
+Applies when a model is rebuilt from caliper measurements of an original part.
+- Ignore deviations of 0.1–0.2 mm; that is the reading error on a worn original.
+- Prefer assembled stack checks: the user selects two faces in the GUI and gives the distance. Read them with `sel()`. Change the model where several checks agree. A single reading that breaks an otherwise consistent stack is the outlier.
+- When a large deviation appears, first look for a stale reference in the model (a feature left at an absolute Z, a datum from an older version of the part) before you move the feature.
+- When the user says the part will be made in metal, the FDM rules (walls, ligaments, overhangs, oversized holes) do not apply. Use metal practice: ISO 273 clearances, tap drills, cosmetic threads, standard screws.
+
+## Fasteners in models (2026-10-24)
+- Take screws from the Fasteners workbench. When a standard or size is missing (no DIN 963, no M1 in ISO 2009), add a CSV row as a patch in `tools/patches/` (`fasteners-din963-m1.patch`) instead of drawing the screw. The patch is lost on an add-on update, so re-apply it.
+- Fasteners rewrites `Label` on every recompute (`M1x1.4-Screw…`); keep the standard and the installation site in `Label2`.
+- Clamped parts get clearance holes and the threaded part gets a tapped hole. A screw that threads into both parts cannot clamp them.
+
+## TechDraw drawings (2026-10-24)
+- Export pages with `TechDrawGui.exportPageAsSvg` only; `exportPageAsPdf` crashed FreeCAD 26.3 and `run()` refuses it.
+- A dimension that should show a label instead of the value: `Arbitrary = True`, `FormatSpec = 'D7'`; `getRawValue()` still returns the model value.
+- Dimensions reference view vertices by index. Find them by coordinates: DrawViewPart vertices are centred on the view's bounding-box centre, DrawViewSection vertices are in model coordinates. Re-bind them after a geometry change.
+- The label offsets `X`/`Y` are page millimetres. Hidden-line computation is asynchronous, so read vertices in the next call.
+- Set `KeepUpdated = False` on the pages during stress tests.
 
 ## Animations and exploded views (2026-10-20)
 Proven on the roller stand (`roller-stand/renders/roller_stand_exploded_reel.mp4`, 15 s Reels loop).

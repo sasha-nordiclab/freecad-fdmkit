@@ -1,0 +1,31 @@
+diff -ru a/FsData/iso2009def.csv b/FsData/iso2009def.csv
+--- a/FsData/iso2009def.csv	2026-10-24 14:40:47
++++ b/FsData/iso2009def.csv	2026-10-24 14:40:47
+@@ -3,6 +3,7 @@
+ "ISO7046def"
+ "ISO7047def"
+ "Dia","P","a","b","dk_theo","csh_diam","csh_height","n_min","r","t_mean","x"
++"M1",0.25,0.5,25,2.2,1.83,0.6,0.31,0.1,0.25,0.6
+ "M1.6",0.35,0.7,25,3.6,2.8,1.0,0.46,0.2,0.4,0.9
+ "M2",0.4,0.8,25,4.4,3.6,1.2,0.56,0.3,0.5,1.0
+ "M2.5",0.45,0.9,25,5.5,4.5,1.5,0.66,0.3,0.6,1.1
+@@ -50,6 +51,7 @@
+ "ISO7046range"
+ "ISO7047range"
+ "Dia","Min_L","Max_L"
++"M1","2","5"
+ "M1.6","2.5","16"
+ "M2","3","20"
+ "M2.5","4","25"
+diff -ru a/FsData/standard_diameters.csv b/FsData/standard_diameters.csv
+--- a/FsData/standard_diameters.csv	2026-10-24 14:40:47
++++ b/FsData/standard_diameters.csv	2026-10-24 14:40:47
+@@ -6,7 +6,7 @@
+ "ISO4762","M1.6","M64"
+ "DIN7984","M3","M24"
+ "DIN6912","M4","M36"
+-"ISO2009","M1.6","M10"
++"ISO2009","M1","M10"
+ "ISO2010","M1.6","M10"
+ "ISO1580","M1.6","M10"
+ "ISO7045","M1.6","M10"
