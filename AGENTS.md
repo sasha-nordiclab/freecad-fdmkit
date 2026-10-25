@@ -23,3 +23,11 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
 - 26.3 properties used by the kit include StartType/StartOffset/StartReference, Common on subtractive features, Hole cosmetic threads and PolarPattern SuppressedIndices. Probe property availability and enumeration values before adding more features.
 - `run()` must survive a call that closes the active document (`reopen()`): `_alive(d)` guards the commit and abort, which used to fail with "Cannot access attribute 'abortTransaction' of deleted object". `run()` refuses any expression containing `exportPageAsPdf`, which crashed FreeCAD 26.3.
 - Model checks (`check`, `lint`, `case`, `sel`, `reopen`) came from the ORWO 828 revision (2026-10-24). There a PartDesign Hole whose sketch was tangent to the cylinder dropped one of two holes between recomputes, and features left at an absolute Z drifted when the parent part grew. Fasteners objects are recognised by a proxy module starting with `Fasteners`. The selftest covers each check; tangent detection was verified on the ORWO model (six tangent sketches found with the standoff set to 0).
+
+## Agent traps seen in use (fix in the kit or in the tool description)
+- `?` inside a batch (`a(); b(); ?expr`) was a bare `SyntaxError ... step 0`, nothing ran. `run()` now parses first and returns `ERR parse` with a hint. Fixed 2026-10-25 (ORWO 828).
+- A pad/pocket whose profile points away from the solid returned `OK` with an unchanged volume; the agent had to compare volumes by hand. `_finish` now refuses a feature that changes nothing (`try reverse=True`). Fixed 2026-10-25.
+- `pocket(reverse=)` existed but the tool description did not list it, so the agent set `Reversed` by hand. Listed now.
+- `new(name)` creates a new document, not a Body; agents used it inside a project and left stray files. The description says so; a `body(name)` helper for the open document is still open.
+- Sheet cells set with a bare number are unitless and break mm expressions; the description says `'x mm'`.
+- Placing a radial sketch: the XZ sketch normal is −Y; the AttachmentOffset pattern is in the description.

@@ -13,13 +13,16 @@ import fc  # noqa: E402
 DESCRIPTION = """Run fdmkit calls in the open FreeCAD. 'a(); b(); c()' = one transaction, one result
 per call; any ERR rolls the whole batch back. Batch related steps to save round trips.
 Lengths/angles: number or expression; bare params names allowed ('wall*2').
-P(name=val,...) set | P() list | new(name) | plane(name, base='XY'|datum, offset)
+P(name=val,...) set (lengths 'x mm') | P() list | new(name) = NEW DOCUMENT; a Body in the open
+one: App.ActiveDocument.addObject('PartDesign::Body',n) + setActiveObject('pdbody') | plane(name, base='XY'|datum, offset)
 sk(name, on='XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
 Parallel loft sections: attach sketches to an origin plane and set a parametric
 AttachmentOffset; create separate datum planes only when they add a real reference.
+Radial sketch on 'XZ' (normal -Y) turned to azimuth a about Z: AttachmentOffset
+placement(vector(d*sin(a); 0 mm; d*cos(a)); rotation(vector(0; 1; 0); a)), a = 0 on -Y.
 slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r)
 half(sk) cuts a sketch symmetric about its H axis to y>=0, in place
-pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through') | revolve(sk,angle=360,axis='V_Axis'|'Z')
+pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through',reverse) | revolve(sk,angle=360,axis='V_Axis'|'Z')
 26.3 starts: pad/pocket/revolve/groove(...,start='profile'|'offset'|'reference',
 offset=expr,reference='XY'|datum); pocket/groove/hole(...,operation='subtract'|'common')
 hole(sk,diameter,depth='through',thread_type=None,thread_size=None,
@@ -27,7 +30,8 @@ model_thread=False,cosmetic_thread=True) | groove(sk,angle=360,axis='V_Axis'|'Z'
 polar(features,occurrences,axis='Z',angle=360,suppressed=()) indices are zero-based
 mirror([features],plane='XY'|datum) PartDesign::Mirrored | move(feature, after)
 dim(sk,'r1_w',val) | chk() | why(name) | tree() | undo() | selftest() | reload()
-SPEED: '?expr' = read-only (no transaction/recompute). focus('Body',...) = recompute only
+SPEED: '?expr' = read-only (no transaction/recompute); '?' only at the very start, never
+mid-batch: write steps and the read go in separate calls. focus('Body',...) = recompute only
 those Bodies + params until full(); full() = one recompute + Assembly solve.
 freeze('Name',...) / thaw(...) = Std_ToggleFreeze heavy objects (Assembly, gears, STEP).
 freeze_all() / thaw_all() = every non-link object (animations); then full().

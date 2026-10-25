@@ -674,6 +674,9 @@ def _finish(f, s):
         raise FdmkitError('; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
     if not f.Shape.isValid() or len(f.Shape.Solids) != 1:
         raise FdmkitError(f'{f.Name}: solids {len(f.Shape.Solids)}')
+    if prev and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
+        raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); '
+                          'profile misses the solid or points away: try reverse=True')
     s.Visibility = False
     if prev:
         prev.Visibility = False
@@ -1385,6 +1388,12 @@ def run(expr):
     '?expr' is read-only: no transaction, no recompute, no autosave."""
     if 'exportPageAsPdf' in expr:
         return 'ERR exportPageAsPdf crashes FreeCAD 26.3; use TechDrawGui.exportPageAsSvg'
+    try:
+        ast.parse(expr.lstrip()[1:] if expr.lstrip().startswith('?') else expr)
+    except SyntaxError as e:
+        hint = ("; '?' marks the whole expr as read-only and goes only at its very start,"
+                " never inside a batch" if re.search(r'[;\n]\s*\?', expr) else '')
+        return f'ERR parse: {e.msg} at col {e.offset}{hint}'
     if expr.lstrip().startswith('?'):
         try:
             ns = _ns()
@@ -1485,6 +1494,10 @@ def selftest():
            lambda r: r.startswith('ERR') and len(d.Objects) == n and _sk_issue(d.getObject('holes')) == '')
         ck('batch_rollback', "sk('b2', 'top'); circ('b2', 3, -15, -6); nosuch()",
            lambda r: r.startswith('ERR step 3') and d.getObject('b2') is None)
+        n = len(d.Objects)
+        ck('pocket_noop', "sk('far', 'top'); circ('far', 3, 60, 0); pocket('far', 2, reverse=True)",
+           lambda r: 'changed nothing' in r and len(d.Objects) == n)
+        ck('parse_hint', "chk(); ?d", lambda r: r.startswith('ERR parse') and "'?'" in r)
         ck('pocket', "pocket('holes')", lambda r: r.startswith('pocket: OK'))
         ck('undo', "undo()", lambda r: d.getObject('pocket') is None)
         ck('dim', "dim('outline', 'r1_w', 'width + 2')", lambda r: 'bb 42.0x' in r)
