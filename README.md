@@ -110,6 +110,8 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `check(*bodies)` | Whole document: one valid solid per Body, no object in error, sketches at DoF 0, no volume intersection between Bodies, every Fasteners object on a hole axis |
 | `lint()` | Known traps: Hole sketch tangent to a cylinder, countersink apex on the hole floor, deactivated sketches placed by plain numbers, expressions that reach into another Body, unused params aliases |
 | `case('alias' or 'sheet.alias', value)` | Parametric stress test: set the value, `check()`, restore it (TechDraw pages paused meanwhile) |
+| `cnc(*bodies, skip=(), cutter=None, holes=False)` | CNC check, lathe + 4-axis mill: sharp inside corners without a reachable floor, fillets below the cutter radius, unreachable milled faces, narrow/deep slots, lathe grooves, deep holes, thin walls; `cnc_show()` / `cnc_restore()` paint the faces |
+| `cam_job(name, body, stock, azimuth, cutter)`, `cam_slot(job, p1, p2, depth)`, `cam_sim(job)`, `cam_del(job)` | Native CAM setup per A-axis index, Slot op in part coordinates, CAM_SimulatorGL, CAM teardown |
 | `sel()` | The GUI selection (planes, cylinders, circles, vertices) and the distance between two selected items |
 | `reopen()` | Save, close, reopen and recompute the active document |
 

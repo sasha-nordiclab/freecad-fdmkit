@@ -42,11 +42,27 @@ to a cylinder, countersink apex on the hole floor, sketches placed by plain numb
 cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set,
 check(), restore (stress test) | sel() = GUI selection + distance | reopen() = save,
 close, open, recompute. TechDraw: SVG export only (exportPageAsPdf crashes 26.3).
+CNC (metal, lathe + 4-axis mill, A = part Z; cutter Ø = 2 x params.CncCornerRadius or cutter=):
+cnc(*bodies, skip=(), cutter=None, holes=False) = sharp inside corners without a floor the
+cutter reaches (stick-out <= 6 Ø), fillets < cutter R, unreachable milled faces, slots < Ø or
+deeper than 4 x width, lathe grooves < 0.5, holes L/D > 8, walls < 0.3; holes=True lists tap
+drill / ISO 273 sizes | cnc_show() / cnc_restore() = faces of the last cnc() red / colours back.
+CAM (native workbench): cam_job(name, body, stock=feature_before, azimuth=deg, cutter=Ø) =
+one setup; azimuth = A-axis index (model + stock clones turned so that radial is +Z, the
+simulator is 3-axis); name gets a 'Job' prefix | cam_slot(job, p1, p2, depth) = Slot op,
+points in PART coordinates on the top surface | cam_sim(job) = CAM_SimulatorGL tab, Play
+| cam_del(job) = CAM's own teardown.
 Namespace: fdmkit calls + App + Gui; import other modules inside the call.
 Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l...
 RULE symmetry: parts are often mirrored pairs (Module_A/Module_B) or symmetric about a
 plane (bays about a divider). Model one side, derive the other by mirroring; make
-layouts (windows, holes, ribs) symmetric; every design revision checks symmetry first."""
+layouts (windows, holes, ribs) symmetric; every design revision checks symmetry first.
+LOCAL COORDINATES: model each Body about its own functional origin and symmetry planes;
+Assembly Links/joints place it in the assembly. Use geometric relations and construction
+geometry, then minimal named dimensions; no per-vertex dimension grids or mass Block/Fixed.
+For local source Bodies, check(*assembly_link_names) / case(name, value, *assembly_link_names)
+check the assembled parts; plain check() would compare Bodies overlapping at their origins.
+Migration procedure: skill/rules.md "Local part coordinates and assembly placement"."""
 
 INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
 1. Understand the part in use first: how it mounts, what bears where, real loads,
@@ -106,7 +122,8 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
     Assembly for assemblies, joints, motion limits, Simulation, BOM and exploded views,
     Fasteners, freecad.gears, UNI-Rolling-Bearing, SheetMetal for hardware and sheet parts,
     Measure, Material, Fem/Plot, Mesh/MeshPart, Import, TechDraw, Draft, Surface, Inspection,
-    Points/ReverseEngineering for their own tasks. CAM/BIM/Robot are not used. Install a
+    Points/ReverseEngineering for their own tasks; CAM for metal CNC setups and the cutter
+    simulation (cam_job/cam_slot/cam_sim); BIM/Robot are not used. Install a
     workbench via AddonManager only after the user agrees. No Placement expressions to
     place or animate parts when an Assembly joint can do it.
 15. Speed (rules.md "Speed with big documents"): focus() the Bodies being edited, freeze()
@@ -127,7 +144,23 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
     sit 1 mm outside the cylinder (tangent planes make OCC drop holes at random).
 18. Reverse engineering from the user's caliper measurements (rules.md "Measured
     reverse engineering"): ignore 0.1-0.2 mm deviations, prefer assembled stack checks
-    between two selected faces (sel()), change the model where several checks agree."""
+    between two selected faces (sel()), change the model where several checks agree.
+19. Metal CNC parts (rules.md "Metal CNC parts"): turning first, every turned part one
+    Revolution of a closed R-Z profile; inside corners along the cutter axis get the cutter
+    radius (params.CncCornerRadius), floor-wall corners stay sharp; ISO tap drills and ISO 273
+    clearances, standard screws. After a change run cnc() with check()/lint(); show a doubtful
+    spot with cam_job + cam_slot + cam_sim on the real model, not with a drawn tool.
+20. Local part coordinates (rules.md "Local part coordinates and assembly placement"):
+    choose a functional origin (axis + mid-plane, shoulder or mounting face), align local
+    symmetry planes, keep source Bodies at identity and place their Links with native
+    Assembly joints. Use H/V, coincidence, symmetry, equality, tangency and construction
+    geometry before minimal independent dimensions; do not fix geometry to reach DoF 0.
+    For a migration, work on a copy and retain an untouched baseline. Rebase sketch
+    geometry, origin-relative dimensions, supports and joint connectors consistently;
+    preserve feature history and repair edge/face references geometrically. Compare the
+    assembled solids in both Boolean directions, test main parameters and moving joints,
+    then reopen, check(*assembly_link_names), lint(), and cnc() for metal. Rebase CAM/text
+    consumers too; keep drawings frozen unless their refresh was requested."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},

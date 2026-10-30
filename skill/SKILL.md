@@ -1,6 +1,6 @@
 ---
 name: fdmkit
-description: Model FDM parts in the user's running FreeCAD through the fdmkit MCP tool run(expr) — native PartDesign, sketches at DoF 0, sizes in the params sheet. Use for any FreeCAD modelling, editing or checking ("сделай модель", "поправь", "добавь паз", "проверь").
+description: Model FDM and metal CNC parts in the user's running FreeCAD through the fdmkit MCP tool run(expr) — native PartDesign, sketches at DoF 0, sizes in the params sheet; CNC checks (cnc()) and native CAM cutter simulation (cam_job/cam_slot/cam_sim). Use for any FreeCAD modelling, editing or checking ("сделай модель", "поправь", "добавь паз", "проверь", "проверь под ЧПУ/токарку").
 ---
 
 # fdmkit
@@ -9,6 +9,7 @@ All modelling goes through MCP `fdmkit.run(expr)`. No raw FreeCAD scripts, no sc
 The user watches the model in the GUI. Reply only with OK, the errors or the numbers.
 
 - Batch related steps into one call: `sk('s','XY'); rect('s','w','d'); pad('s','h')`. It is one transaction, so any ERR rolls back the whole batch.
+- Model each Body about its own functional origin/symmetry planes; native Assembly joints position its Links. Use geometric relationships and construction geometry before minimal named dimensions, never per-vertex coordinate grids or mass Block/Fixed. For migration and assembly-aware checks, follow rules.md "Local part coordinates and assembly placement"; use `check(*assembly_link_names)` for locally authored Bodies.
 - Every size is a `P(...)` parameter. Pass param names or expressions, not literals: `rect('s','w','d')`.
 - Sketches attach to stable origin or datum planes, never generated faces. For parallel loft sections, use one origin plane with each sketch’s expression-driven `AttachmentOffset.Base.z` instead of creating a datum plane per section. Use `plane(name, base, offset)` when a distinct geometric reference is needed. Keep sketches fully constrained and verify the loft after simplifying supports.
 - FreeCAD 26.3 starts: `pad`, `pocket`, `revolve`, `groove` and `hole` accept `start='offset', offset=expr` or `start='reference', reference='datum'`. Use a datum or origin plane for references; keep the Body one valid solid.
@@ -25,4 +26,5 @@ The user watches the model in the GUI. Reply only with OK, the errors or the num
 - Animations and exploded-view videos: ExplodedAssembly, i10g or Animate plus Assembly Simulation, not a hand-written placement loop. Follow rules.md "Animations and exploded views": `freeze_all()`, record i10g steps, fixed perspective camera, `i10g_video()` (async), wait for ffmpeg, `thaw_all()` + `full()`. i10g needs `tools/patches/i10g-shapeappearance.patch` on FreeCAD 26.
 - `?expr` and normal calls both see `App` and `Gui`; import anything else inside the call.
 - Use FreeCAD's standard workbench for each job; the full table of installed workbenches (Sketcher, PartDesign, Part, Spreadsheet, Assembly, Fasteners, freecad.gears, UNI-Rolling-Bearing, SheetMetal, Measure, Material, Fem, Plot, Mesh/MeshPart, Import, TechDraw, Draft, Surface, Inspection, Points/ReverseEngineering, OpenSCAD) is in rules.md, "Standard workbenches for each job". No Placement expressions to position or animate parts.
+- Metal CNC parts: follow rules.md "Metal CNC parts" — run `cnc()` after each change with `check()` and `lint()`, show doubtful spots with `cam_job` + `cam_slot` + `cam_sim` (native CAM), remove Jobs with `cam_del()`.
 - Export a file only when the user asks for one.
