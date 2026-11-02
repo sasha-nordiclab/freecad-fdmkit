@@ -2,13 +2,13 @@
 
 These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` and `skill/rules.md`.
 
-- Target: FreeCAD 26.3 RC1 on macOS arm64; also keep the 2026-09-29 weekly working. The API is checked with probes against the running FreeCAD, not from memory.
+- Target: FreeCAD 27.1 weekly (2026-10-28 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
 - Layout:
   - `fdmkit/__init__.py` is the whole kit.
   - `Init.py` is the autoload entry.
   - `tools/fc.py` is the XML-RPC client.
   - `fdmkit_mcp/server.py` is the MCP server: one tool, `run`, no dependencies.
-- This repo is symlinked as `~/Library/Application Support/FreeCAD/v26-3/Mod/fdmkit`.
+- This repo is symlinked as `~/Library/Application Support/FreeCAD/v27-1/Mod/fdmkit` (FreeCAD keeps one user dir per version; migrating settings copies the link). `tools/fc.py` imports from the repo itself, not from a versioned Mod path.
 - After editing, run `python3 tools/fc.py --reload && python3 tools/fc.py --selftest`. The selftest must stay all-OK; add a check for each new function.
 - Rules:
   - Only native PartDesign: no Part::Feature blobs.
@@ -36,3 +36,25 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
 - Placing a radial sketch: the XZ sketch normal is −Y; the AttachmentOffset pattern is in the description.
 
 - Local-coordinate workflow (ORWO 828, 2026-10-30): the MCP description/instructions and `skill/rules.md` now specify functional local Body origins, geometric symmetry constraints, native Assembly placement, and baseline-preserving migration. `check(*link_names)` checks assembled local parts; default `check()` checks overlapping authoring Bodies. `case()` does not explicitly solve the Assembly. Open a working copy in its own call before editing: transaction rollback belongs to the document active at call entry. No new conversion API was added; this is a modelling procedure.
+
+- 26.3/27.1 features (2026-10-31, from the official 26.3 release notes, probed on the 27.1 weekly): `midplane`, Revolution/Groove `type`/`up_to`, `circular`, `path_pattern`, `point_pattern`, `defeature`, `thickness`, `mass`, `sel()` axis angle, `link_array`, `rigid_group`, `snapshot`/`snapshot_restore`; selftest 88/88. Probed facts:
+  - `body.newObject()` leaves the Tip on the pattern's original, so a feature added after `polar()` silently dropped the pattern from the Body shape (a bug in 0.2.0). `_pattern()` now sets `body.Tip`. A pattern gets its BaseFeature only on recompute; compare volumes after `_rc`.
+  - PathPattern with `RelativeToFirst=False` (the default) places the original as if it sat at the path start, so every instance can miss the solid without an error; the kit sets True. PointPattern uses circle centres of a sketch, the first centre marks the original.
+  - Thickness `Reversed=True` (the default) means inwards; OCC fails ("Failed to make thick solid") on a cylinder with grooves.
+  - `Part::LinkArrayLinear` in `Mode='Spacing'` takes the step from `Offset`; `Length` is the extent in `Mode='Extent'`.
+  - Assembly RigidGroup joints and Snapshots are App::FeaturePython proxies (`JointObject.RigidGroupJoint`, `CommandCreateSnapshot.Snapshot`) that work without an active assembly; moving one rigid-group member moves the others on recompute.
+  - Std_MassProperties exists only as a GUI task panel; `mass()` uses OCC solid properties. FreeCAD's 'Default' material carries a placeholder density of 1e-9 kg/mm³, ignored.
+  - CAM Rotary Surface needs opencamlib (present in the 27.1 bundle as `opencamlib`) and a Job Machine with a rotary axis; CAM_SimulatorGL stays 3-axis. Not wrapped.
+
+- Sketch regions (2026-11-02, from the MangoJelly 26.3 Sketch Internals manual, probed on the 27.1 weekly 2026-10-27 build): `pad`/`pocket(at=)`, `regions`, `remap`, region as `start='reference'`, `lint()` lost references; selftest 98/98. Probed facts:
+  - `Sketcher::SketchObject.MakeInternals` is False on sketches made from Python; `InternalShape` holds the regions in sketch-local coordinates, `getSubObject('InternalFaceN')` in global ones. N = index in `InternalShape.Faces` + 1; the outer region of nested contours comes with its holes cut out.
+  - The GUI's Support of a Pad/Pocket is the `Profile` LinkSub `(sketch, ['InternalFace2', ...])`; `Profile = sketch` is the whole sketch. There is no Support property.
+  - Deleting another contour remaps `InternalFace3` → `InternalFace2` automatically; deleting the region itself leaves `?InternalFace3`, State Invalid, and the old shape (volume unchanged).
+  - `StartOffset` is measured along the feature direction: pad along +normal, pocket along the cut (−normal); `Reversed` flips both.
+  - A failed batch rolls back, so a following `undo()` undoes the previous successful call.
+
+- From freecad_2026_features_workflows.md / freecad_ai_agent_rules_2026.md (2026-11-02): most items were already wrapped; added `linear()` (row or 2D grid in one LinearPattern), rules on pattern choice, revolve vs master-sketch regions, sketch granularity, Sketcher Text, async recompute, and the FreeCAD build in each project handoff; selftest 100/100. Probed facts:
+  - LinearPattern: `Mode` Extent/Spacing (Spacing reads `Offset`), `Direction2`/`Occurrences2`/`Mode2`/`Offset2` for a grid, `SuppressedIndices` flat index = i·Occurrences2 + j (`SuppressedPositions` holds the (i, j) pairs). Indices set before `Occurrences` are dropped beyond the current count, so `linear()` sets them last; `polar` keeps them.
+  - Revolution `StartOffset` is `App::PropertyAngle`.
+  - Sketcher Text: GUI command `Sketcher_CreateText` and `SketchObject.setTextAndFont(constraint, text, font_path, isHeight, isConstruction)` exist, but `Sketcher.Constraint('Text', ...)` rejects every argument form, so there is no Python path; not wrapped. `ShowDevelopmentPreviewFeatures` is off (Group constraint hidden).
+  - `EnableAsyncRecompute` is True; it applies to GUI commands (Std_Refresh), `Document.recompute()` from Python stays synchronous.

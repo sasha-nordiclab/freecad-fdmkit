@@ -1,4 +1,4 @@
-"""fdmkit: lean parametric PartDesign helpers for FDM (FreeCAD 26.3).
+"""fdmkit: lean parametric PartDesign helpers for FDM and CNC (FreeCAD 26.3, 27.1).
 
 Entry point is run(expr): one call = one transaction, result = one line.
 Lengths and angles take a number or an expression; bare names of params
@@ -14,10 +14,12 @@ import FreeCAD as App
 import Part
 import Sketcher
 
-__version__ = '0.2.0'
-__all__ = ['new', 'P', 'plane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
-           'half', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'polar', 'mirror', 'move',
-           'dim', 'chk', 'why', 'tree', 'check', 'lint', 'case', 'sel', 'reopen',
+__version__ = '0.4.0'
+__all__ = ['new', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
+           'half', 'regions', 'remap', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'linear', 'polar', 'circular',
+           'path_pattern', 'point_pattern', 'mirror', 'move', 'defeature', 'thickness',
+           'dim', 'chk', 'why', 'tree', 'check', 'lint', 'case', 'sel', 'mass', 'reopen',
+           'link_array', 'rigid_group', 'snapshot', 'snapshot_restore',
            'undo', 'selftest', 'focus', 'full', 'freeze', 'thaw',
            'freeze_all', 'thaw_all', 'i10g_video',
            'cnc', 'cnc_show', 'cnc_restore', 'cam_job', 'cam_slot', 'cam_sim', 'cam_del']
@@ -85,6 +87,22 @@ def _bad(o):
 def _origin(b, key):
     role = _ORIGIN[key]
     return next(f for f in b.Origin.OriginFeatures if f.Role == role)
+
+
+_SUB = re.compile(r'(.+)\.((?:Face|Edge|Vertex)\d+)')
+
+
+def _ref(x, b=None):
+    """(object, [sub]) for an origin key of the Body ('XY', 'Z'), an object name,
+    or 'Feature.Face3' as sel() prints it."""
+    if isinstance(x, tuple):
+        return x
+    if x in _ORIGIN:
+        return _origin(b or _body(), x), ['']
+    m = _SUB.fullmatch(x)
+    if m:
+        return _obj(m[1]), [m[2]]
+    return _obj(x), ['']
 
 
 # ---------------------------------------------------------------- params
@@ -220,6 +238,22 @@ def plane(name, base='XY', offset=0):
     if _bad(pl):
         raise FdmkitError(f'{name}: {pl.getStatusString()}')
     return f'{name}: OK z {_num(pl.Placement.Base.z)}'
+
+
+def midplane(name, a, b):
+    """Datum plane midway between two planes or planar faces (26.3 MidPlane attachment);
+    non-parallel ones give the bisector through their intersection line."""
+    _free(name)
+    body = _body()
+    pl = body.newObject('PartDesign::Plane', name)
+    (oa, sa), (ob, sb) = _ref(a, body), _ref(b, body)
+    pl.AttachmentSupport = [(oa, sa[0]), (ob, sb[0])]
+    pl.MapMode = 'MidPlane'
+    _rc(pl.Document)
+    if _bad(pl):
+        raise FdmkitError(f'{name}: {pl.getStatusString()}')
+    p, n = pl.Placement.Base, pl.Placement.Rotation.multVec(V(0, 0, 1))
+    return f'{name}: OK at ({_num(p.x)}, {_num(p.y)}, {_num(p.z)}) n({_num(n.x)}, {_num(n.y)}, {_num(n.z)})'
 
 
 def sk(name, on='XY'):
@@ -645,6 +679,72 @@ def half(sketch):
     return r + f', area {area0:.1f} -> {area1:.1f}'
 
 
+# ---------------------------------------------------------------- sketch regions
+def _faces_of(s):
+    """Closed regions of a sketch (26.3 internal faces, sketch-local), MakeInternals on."""
+    _need(s, 'MakeInternals', 'InternalShape')
+    if not s.MakeInternals:
+        s.MakeInternals = True
+        s.recompute()
+    return s.InternalShape.Faces
+
+
+def _inner_point(f):
+    """A point inside face f: the centre of mass, else the centre of its largest triangle."""
+    c = f.CenterOfMass
+    if f.isInside(c, 1e-6, True):
+        return c
+    pts, tris = f.tessellate(0.1)
+    area = lambda t: (pts[t[1]] - pts[t[0]]).cross(pts[t[2]] - pts[t[0]]).Length
+    t = max(tris, key=area)
+    return (pts[t[0]] + pts[t[1]] + pts[t[2]]) / 3
+
+
+def _region_names(s, at):
+    """InternalFaceN of sketch s for each (x, y) point in sketch coordinates."""
+    if isinstance(at, (tuple, list)) and len(at) == 2 and not isinstance(at[0], (tuple, list)):
+        at = [at]
+    faces = _faces_of(s)
+    names = []
+    for x, y in at:
+        p = V(_val(s, x), _val(s, y), 0)
+        hit = [i for i, f in enumerate(faces) if f.isInside(p, 1e-6, True)]
+        if len(hit) != 1:
+            raise FdmkitError(f'{s.Name}: ({_num(p.x)}, {_num(p.y)}) is '
+                              + ('outside every region' if not hit else 'on a region boundary')
+                              + f'; regions("{s.Name}") lists inner points')
+        n = f'InternalFace{hit[0] + 1}'
+        if abs(s.getSubObject(n).Area - faces[hit[0]].Area) > 1e-6:
+            raise FdmkitError(f'{s.Name}: {n} does not match region {hit[0]}')
+        names.append(n)
+    return list(dict.fromkeys(names))
+
+
+def regions(sketch):
+    """Closed regions of a sketch: name, area, an inner point (x, y) for at=, hole count."""
+    s = _sk(sketch)
+    faces = _faces_of(s)
+    if not faces:
+        raise FdmkitError(f'{s.Name}: no closed regions')
+    out = []
+    for i, f in enumerate(faces):
+        p = _inner_point(f)
+        holes = f' holes {len(f.Wires) - 1}' if len(f.Wires) > 1 else ''
+        out.append(f'InternalFace{i + 1} A {f.Area:.1f} at ({_num(p.x)}, {_num(p.y)}){holes}')
+    return f'{s.Name}: {len(faces)} regions: ' + ' | '.join(out)
+
+
+def remap(feature, *at):
+    """Point a Pad/Pocket at the regions under points at (sketch coords) after a sketch
+    edit lost them; no points = the whole sketch."""
+    f = _obj(feature)
+    if 'Profile' not in f.PropertiesList or not f.Profile:
+        raise FdmkitError(f'{f.Name}: no sketch profile')
+    s = _sk(f.Profile[0])
+    f.Profile = (s, _region_names(s, list(at))) if at else s
+    return _finish(f, s)
+
+
 # ---------------------------------------------------------------- features
 def _shape(sh):
     bb = sh.BoundBox
@@ -658,19 +758,21 @@ def _setq(o, prop, v):
         setattr(o, prop, v)
 
 
-def _feature(kind, name, sketch):
+def _feature(kind, name, sketch, at=None):
     if name:
         _free(name)
     s = _sk(sketch)
+    sub = _region_names(s, at) if at is not None else None
     f = _body().newObject(kind, name or kind.split('::')[1].lower())
-    f.Profile = s
+    f.Profile = (s, sub) if sub else s
     return f, s
 
 
 def _finish(f, s):
+    """s = the profile sketch to hide, or None for a feature without one."""
     prev = f.BaseFeature
     _rc(f.Document)
-    bad = [o for o in (s, f) if _bad(o)]
+    bad = [o for o in (s, f) if o and _bad(o)]
     if bad:
         raise FdmkitError('; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
     if not f.Shape.isValid() or len(f.Shape.Solids) != 1:
@@ -678,7 +780,8 @@ def _finish(f, s):
     if prev and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
         raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); '
                           'profile misses the solid or points away: try reverse=True')
-    s.Visibility = False
+    if s:
+        s.Visibility = False
     if prev:
         prev.Visibility = False
     return f'{f.Name}: OK ' + _shape(f.Shape)
@@ -712,12 +815,16 @@ def _set_start(f, start, offset, reference):
         _setq(f, 'StartOffset', offset)
     else:
         if reference is None or offset != 0:
-            raise FdmkitError('start=reference needs a plane and no offset')
-        ref = _origin(_body(), reference) if reference in _ORIGIN else _obj(reference)
-        if ref.TypeId not in ('PartDesign::Plane', 'App::Plane'):
-            raise FdmkitError(f'{reference}: not a plane')
+            raise FdmkitError('start=reference needs a plane or sketch region and no offset')
         _need(f, 'StartReference')
-        f.StartReference = (ref, [''])
+        if isinstance(reference, tuple):   # (sketch, (x, y)): the region under the point
+            s = _sk(reference[0])
+            f.StartReference = (s, _region_names(s, reference[1]))
+        else:
+            ref = _origin(_body(), reference) if reference in _ORIGIN else _obj(reference)
+            if ref.TypeId not in ('PartDesign::Plane', 'App::Plane'):
+                raise FdmkitError(f'{reference}: not a plane; a sketch region is (sketch, (x, y))')
+            f.StartReference = (ref, [''])
     f.StartType = _STARTS[start]
 
 
@@ -732,8 +839,10 @@ def _set_operation(f, operation):
 
 
 def pad(sketch, length, name=None, side='one', reverse=False,
-        start='profile', offset=0, reference=None):
-    f, s = _feature('PartDesign::Pad', name, sketch)
+        start='profile', offset=0, reference=None, at=None):
+    """at: (x, y) or [(x, y), ...] in sketch coords picks only the regions under
+    those points (26.3 sketch internals); None pads the whole sketch."""
+    f, s = _feature('PartDesign::Pad', name, sketch, at)
     _setq(f, 'Length', length)
     f.SideType = _SIDES[side]
     f.Reversed = reverse
@@ -742,8 +851,8 @@ def pad(sketch, length, name=None, side='one', reverse=False,
 
 
 def pocket(sketch, depth='through', name=None, side='one', reverse=False,
-           start='profile', offset=0, reference=None, operation='subtract'):
-    f, s = _feature('PartDesign::Pocket', name, sketch)
+           start='profile', offset=0, reference=None, operation='subtract', at=None):
+    f, s = _feature('PartDesign::Pocket', name, sketch, at)
     if depth == 'through':
         f.Type = 'ThroughAll'
     else:
@@ -785,8 +894,22 @@ def hole(sketch, diameter, depth='through', name=None, start='profile',
     return _finish(f, s)
 
 
+_TYPES = {'angle': 'Angle', 'up_to_face': 'UpToFace', 'up_to_first': 'UpToFirst',
+          'up_to_last': 'UpToLast', 'through': 'ThroughAll'}
+
+
+def _set_type(f, type, up_to):
+    if type not in _TYPES or _TYPES[type] not in f.getEnumerationsOfProperty('Type'):
+        raise FdmkitError(f'{f.TypeId}: type={type} unavailable')
+    if (type == 'up_to_face') != (up_to is not None):
+        raise FdmkitError('type=up_to_face needs up_to (a plane or Feature.FaceN); other types take none')
+    f.Type = _TYPES[type]
+    if up_to is not None:
+        f.UpToFace = _ref(up_to)
+
+
 def _rotation(sketch, kind, angle, axis, name, side, reverse,
-              start, offset, reference, project_axis, operation=None):
+              start, offset, reference, project_axis, type, up_to, operation=None):
     if axis not in ('V_Axis', 'H_Axis', 'X', 'Y', 'Z'):
         raise FdmkitError('axis: expected V_Axis, H_Axis, X, Y or Z')
     f, s = _feature(kind, name, sketch)
@@ -795,6 +918,7 @@ def _rotation(sketch, kind, angle, axis, name, side, reverse,
     f.SideType = _SIDES[side]
     f.Reversed = reverse
     _set_start(f, start, offset, reference)
+    _set_type(f, type, up_to)
     if project_axis:
         _need(f, 'ProjectAxis')
         f.ProjectAxis = True
@@ -805,18 +929,20 @@ def _rotation(sketch, kind, angle, axis, name, side, reverse,
 
 def revolve(sketch, angle=360, axis='V_Axis', name=None, side='one',
             reverse=False, start='profile', offset=0, reference=None,
-            project_axis=False):
-    """axis: sketch 'V_Axis'/'H_Axis' or body origin 'X'/'Y'/'Z'."""
+            project_axis=False, type='angle', up_to=None):
+    """axis: sketch 'V_Axis'/'H_Axis' or body origin 'X'/'Y'/'Z'.
+    type: 'angle', 'up_to_face' (up_to = plane or Feature.FaceN), 'up_to_first', 'up_to_last'."""
     return _rotation(sketch, 'PartDesign::Revolution', angle, axis, name, side,
-                     reverse, start, offset, reference, project_axis)
+                     reverse, start, offset, reference, project_axis, type, up_to)
 
 
 def groove(sketch, angle=360, axis='V_Axis', name=None, side='one',
            reverse=False, start='profile', offset=0, reference=None,
-           project_axis=False, operation='subtract'):
-    """Subtractive rotational feature, optionally using 26.3 Common mode."""
+           project_axis=False, operation='subtract', type='angle', up_to=None):
+    """Subtractive rotational feature, optionally using 26.3 Common mode.
+    type: 'angle', 'up_to_face' (up_to = plane or Feature.FaceN), 'up_to_first', 'through'."""
     return _rotation(sketch, 'PartDesign::Groove', angle, axis, name, side,
-                     reverse, start, offset, reference, project_axis, operation)
+                     reverse, start, offset, reference, project_axis, type, up_to, operation)
 
 
 def _solid_tail(b):
@@ -824,34 +950,176 @@ def _solid_tail(b):
     return [o for o in b.Group if o.isDerivedFrom('PartDesign::Feature')][-1]
 
 
-def polar(features, occurrences, axis='Z', angle=360, suppressed=(), name=None):
-    """PartDesign PolarPattern; suppressed uses zero-based instance indices."""
+def _pattern(kind, who, features, name, suppressed):
+    """New PartDesign pattern of features in the active Body, suppressed instances set."""
     b = _body()
     fs = [_obj(x) for x in ([features] if isinstance(features, str) else features)]
     if not fs or any(f not in b.Group or not f.isDerivedFrom('PartDesign::Feature') for f in fs):
-        raise FdmkitError('polar: originals must be features in the active Body')
+        raise FdmkitError(f'{who}: originals must be features in the active Body')
+    if any(not isinstance(i, int) or i < 0 for i in suppressed):
+        raise FdmkitError(f'{who}: suppressed indices must be integers >= 0')
+    if name:
+        _free(name)
+    f = b.newObject(kind, name or who)
+    b.Tip = f       # newObject leaves Tip on the original: later features would skip the pattern
+    f.Originals = fs
+    if suppressed:
+        _need(f, 'SuppressedIndices')
+        f.SuppressedIndices = sorted(set(suppressed))
+    return f, fs
+
+
+def _pattern_done(f, fs):
+    _rc(f.Document)
+    prev = f.BaseFeature                # a pattern gets its BaseFeature on recompute
+    if _bad(f) or f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
+        raise FdmkitError(f'{f.Name}: {f.getStatusString()} solids {len(f.Shape.Solids)}')
+    if prev and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
+        raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); instances miss the solid')
+    for o in fs:
+        o.Visibility = False
+    return f'{f.Name}: OK ' + _shape(f.Shape)
+
+
+def polar(features, occurrences, axis='Z', angle=360, suppressed=(), name=None):
+    """PartDesign PolarPattern; suppressed uses zero-based instance indices."""
     if axis not in ('X', 'Y', 'Z'):
         raise FdmkitError('polar: axis must be X, Y or Z')
     if not isinstance(occurrences, int) or occurrences < 2:
         raise FdmkitError('polar: occurrences must be an integer >= 2')
-    if any(not isinstance(i, int) or i < 0 or i >= occurrences for i in suppressed):
+    if any(isinstance(i, int) and i >= occurrences for i in suppressed):
         raise FdmkitError('polar: suppressed indices must be 0..occurrences-1')
-    if name:
-        _free(name)
-    f = b.newObject('PartDesign::PolarPattern', name or 'polar')
-    f.Originals = fs
-    f.Axis = (_origin(b, axis), [''])
+    f, fs = _pattern('PartDesign::PolarPattern', 'polar', features, name, suppressed)
+    f.Axis = (_origin(_body(), axis), [''])
     f.Occurrences = occurrences
     _setq(f, 'Angle', angle)
-    if suppressed:
+    return _pattern_done(f, fs)
+
+
+def linear(features, direction, count, step=None, extent=None, direction2=None, count2=1,
+           step2=None, extent2=None, reverse=False, reverse2=False, suppressed=(), name=None):
+    """PartDesign LinearPattern along an origin axis or 'Feature.EdgeN': count instances step
+    apart (or spread over extent); direction2/count2 make a grid in one feature (step2/extent2
+    default to step/extent). suppressed:
+    zero-based indices, on a grid (i, j) pairs = instance i along direction, j along direction2."""
+    if not isinstance(count, int) or count < 1 or not isinstance(count2, int) or count2 < 1 \
+            or count * count2 < 2:
+        raise FdmkitError('linear: count and count2 must be integers >= 1, together >= 2')
+    if (count2 > 1) != (direction2 is not None):
+        raise FdmkitError('linear: direction2 and count2 > 1 go together')
+    idx = []
+    for i in suppressed:
+        k = i[0] * count2 + i[1] if isinstance(i, tuple) and len(i) == 2 else i
+        if not isinstance(k, int) or not 0 <= k < count * count2:
+            raise FdmkitError(f'linear: suppressed {i} outside the {count}x{count2} instances')
+        idx.append(k)
+    f, fs = _pattern('PartDesign::LinearPattern', 'linear', features, name, ())
+    for sfx, dirn, n, st, ex, rev in (('', direction, count, step, extent, reverse),
+                                      ('2', direction2, count2,
+                                       step if step2 is None and extent2 is None else step2,
+                                       extent if step2 is None and extent2 is None else extent2, reverse2)):
+        if dirn is None:
+            continue
+        if (st is None) == (ex is None) and n > 1:
+            raise FdmkitError(f'linear: give step{sfx} or extent{sfx}')
+        setattr(f, 'Direction' + sfx, _ref(dirn))
+        setattr(f, 'Occurrences' + sfx, n)
+        setattr(f, 'Reversed' + sfx, rev)
+        if st is not None:
+            setattr(f, 'Mode' + sfx, 'Spacing')      # Spacing takes the step from Offset
+            _setq(f, 'Offset' + sfx, st)
+        elif ex is not None:
+            setattr(f, 'Mode' + sfx, 'Extent')
+            _setq(f, 'Length' + sfx, ex)
+    if idx:     # after the counts: FreeCAD drops indices beyond the current Occurrences
         _need(f, 'SuppressedIndices')
-        f.SuppressedIndices = sorted(set(suppressed))
-    _rc(f.Document)
-    if _bad(f) or f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
-        raise FdmkitError(f'{f.Name}: {f.getStatusString()} solids {len(f.Shape.Solids)}')
-    for o in fs:
-        o.Visibility = False
-    return f'{f.Name}: OK ' + _shape(f.Shape)
+        f.SuppressedIndices = sorted(set(idx))
+    return _pattern_done(f, fs)
+
+
+def circular(features, rings, radial, tangential, axis='Z', symmetry=1,
+             start_at_shape=True, suppressed=(), name=None):
+    """PartDesign CircularPattern (26.3): `rings` concentric circles `radial` apart about an
+    origin axis, instances `tangential` apart along each circle, the count per circle a multiple
+    of `symmetry`; start_at_shape = the first circle passes through the original."""
+    if axis not in ('X', 'Y', 'Z'):
+        raise FdmkitError('circular: axis must be X, Y or Z')
+    f, fs = _pattern('PartDesign::CircularPattern', 'circular', features, name, suppressed)
+    f.Axis = (_origin(_body(), axis), [''])
+    f.NumberCircles = rings
+    f.Symmetry = symmetry
+    f.StartAtShape = start_at_shape
+    _setq(f, 'RadialDistance', radial)
+    _setq(f, 'TangentialDistance', tangential)
+    return _pattern_done(f, fs)
+
+
+def path_pattern(features, path, count=None, spacing=None, align=False, suppressed=(), name=None):
+    """PartDesign PathPattern (26.3) along an edge ('sketch.Edge1', 'Feature.Edge4') or a whole
+    sketch: count instances spread over the path, spacing apart, or both. The first instance is the
+    original (RelativeToFirst); align turns instances with the path tangent."""
+    if count is None and spacing is None:
+        raise FdmkitError('path_pattern: give count, spacing or both')
+    f, fs = _pattern('PartDesign::PathPattern', 'path_pattern', features, name, suppressed)
+    f.Path = _ref(path)
+    f.RelativeToFirst = True    # False places the original as if it sat at the path start
+    f.Align = align
+    f.SpacingMode = ('Fixed count' if spacing is None else 'Fixed spacing' if count is None
+                     else 'Fixed count and spacing')
+    if count is not None:
+        f.Count = count
+    if spacing is not None:
+        _setq(f, 'Spacing', spacing)
+    return _pattern_done(f, fs)
+
+
+def point_pattern(features, points, suppressed=(), name=None):
+    """PartDesign PointPattern (26.3) at the points of a sketch (or 'Feature.VertexN');
+    the first point is the original's position."""
+    f, fs = _pattern('PartDesign::PointPattern', 'point_pattern', features, name, suppressed)
+    f.PointObject = _ref(points)
+    return _pattern_done(f, fs)
+
+
+def _faces(faces, who):
+    """(feature, [FaceN, ...]) from 'Feature.Face3' names of one feature."""
+    refs = [_ref(x) for x in ([faces] if isinstance(faces, str) else faces)]
+    if not refs or len({o.Name for o, _ in refs}) != 1 or any(not s[0].startswith('Face') for _, s in refs):
+        raise FdmkitError(f"{who}: faces must be 'Feature.FaceN' of one feature")
+    return refs[0][0], [s[0] for _, s in refs]
+
+
+def defeature(faces, name=None):
+    """PartDesign Defeaturing (26.3): removes the faces ('Feature.Face7' or a list) and heals the
+    solid, e.g. holes, fillets or bosses of an imported base feature."""
+    if name:
+        _free(name)
+    base, subs = _faces(faces, 'defeature')
+    f = _body().newObject('PartDesign::Defeaturing', name or 'defeature')
+    f.Base = (base, subs)
+    return _finish(f, None)
+
+
+_THICK = {'skin': 'Skin', 'recto_verso': 'RectoVerso'}
+_JOINS = {'arc': 'Arc', 'intersection': 'Intersection'}
+
+
+def thickness(faces, value, mode='skin', join='arc', inward=True, name=None):
+    """PartDesign Thickness: hollow the solid, removing the faces. mode 'skin' = a wall of value
+    inside the faces (inward=False: outside), 'recto_verso' (26.3) = half the value on each
+    side; join 'arc' or 'intersection'."""
+    if mode not in _THICK or join not in _JOINS:
+        raise FdmkitError('thickness: mode skin|recto_verso, join arc|intersection')
+    if name:
+        _free(name)
+    base, subs = _faces(faces, 'thickness')
+    f = _body().newObject('PartDesign::Thickness', name or 'thickness')
+    f.Base = (base, subs)
+    _setq(f, 'Value', value)
+    f.Mode = _THICK[mode]
+    f.Join = _JOINS[join]
+    f.Reversed = inward                 # FreeCAD's Reversed (default True) means inwards
+    return _finish(f, None)
 
 
 def move(feature, after):
@@ -1044,6 +1312,14 @@ def lint():
             if abs(apex - h.Depth.Value) < 1e-6:
                 out.append(f'{h.Name}: countersink apex on the hole floor')
     for o in d.Objects:
+        for prop in ('Profile', 'StartReference', 'UpToFace', 'ReferenceAxis'):
+            v = getattr(o, prop, None) if prop in o.PropertiesList else None
+            lost = [x for x in (v[1] if v else ()) if '?' in x]
+            if lost:
+                # 26.3 keeps the old shape of a feature whose sketch region vanished
+                fix = f'remap("{o.Name}", (x, y))' if prop == 'Profile' else 'set it again'
+                out.append(f'{o.Name}.{prop}: lost {",".join(lost)}, {fix}')
+    for o in d.Objects:
         if o.TypeId == 'Sketcher::SketchObject' and getattr(o, 'MapMode', '') == 'Deactivated' \
                 and 'Placement' not in dict(o.ExpressionEngine) and o.Placement.Base.Length > 1e-9:
             out.append(f'{o.Name}: placed by numbers')
@@ -1107,7 +1383,8 @@ def _describe(sh):
                 return f'plane Z {sh.BoundBox.ZMin:.4g}'
             return f'plane n({n.x:.3g}, {n.y:.3g}, {n.z:.3g})'
         if hasattr(s, 'Radius'):
-            return f'{s.TypeId[10:].lower()} R{s.Radius:.4g} Z {sh.BoundBox.ZMin:.4g}..{sh.BoundBox.ZMax:.4g}'
+            return (f'{s.TypeId[10:].lower()} R{s.Radius:.4g} D{2 * s.Radius:.4g}'
+                    f' Z {sh.BoundBox.ZMin:.4g}..{sh.BoundBox.ZMax:.4g}')
         return s.TypeId[10:].lower()
     if sh.ShapeType == 'Edge':
         c = sh.Curve
@@ -1117,8 +1394,27 @@ def _describe(sh):
     return sh.ShapeType
 
 
+def _axis(sh):
+    """(point, unit direction) of a cylinder or cone face, a circle or line edge, a plane
+    normal; None for other shapes."""
+    if sh.ShapeType == 'Face':
+        s = sh.Surface
+        if s.TypeId in ('Part::GeomCylinder', 'Part::GeomCone'):
+            return s.Center, V(s.Axis).normalize()
+        if s.TypeId == 'Part::GeomPlane':
+            return sh.Vertexes[0].Point, sh.normalAt(0, 0)
+    elif sh.ShapeType == 'Edge':
+        c = sh.Curve
+        if c.TypeId == 'Part::GeomCircle':
+            return c.Center, V(c.Axis).normalize()
+        if c.TypeId == 'Part::GeomLine':
+            return sh.Vertexes[0].Point, (sh.Vertexes[-1].Point - sh.Vertexes[0].Point).normalize()
+    return None
+
+
 def sel():
-    """What is selected in the GUI and, for two items, the distance between them."""
+    """What is selected in the GUI and, for two items, the distance between them, the angle
+    between their axes/normals and, for parallel holes or circles, the distance of the axes."""
     import FreeCADGui as Gui
     items, shapes = [], []
     for s in Gui.Selection.getSelectionEx('', 0):
@@ -1139,7 +1435,55 @@ def sel():
             if abs(abs(na.dot(b.normalAt(0, 0))) - 1) < 1e-9:
                 dist = abs((b.Vertexes[0].Point - a.Vertexes[0].Point).dot(na))
         items.append(f'distance {dist:.4g}')
+        xa, xb = _axis(a), _axis(b)
+        if xa and xb:
+            ang = math.degrees(math.acos(min(1.0, abs(xa[1].dot(xb[1])))))
+            items.append(f'angle {ang:.4g}°')
+            round_ = [x for x in shapes if x.ShapeType == 'Edge' or x.Surface.TypeId != 'Part::GeomPlane']
+            if ang < 1e-6 and len(round_) == 2:
+                items.append(f'axes {(xb[0] - xa[0]).cross(xa[1]).Length:.4g} apart')
     return ' | '.join(items)
+
+
+def _density(o):
+    """g/cm³ of the object's (or its linked object's) material; None for FreeCAD's 'Default'."""
+    for x in (o, getattr(o, 'LinkedObject', None)):
+        m = getattr(x, 'ShapeMaterial', None)
+        if m is not None and m.Name != 'Default' and m.PhysicalProperties.get('Density'):
+            q = App.Units.Quantity(m.PhysicalProperties['Density']).getValueAs('g/cm^3')
+            return float(getattr(q, 'Value', q))
+    return None
+
+
+def mass(*objs, density=None):
+    """Volume, mass, centre of gravity and principal moments of Bodies, Links or shapes (the
+    Std_MassProperties numbers, which only exist in its task panel). density (g/cm³) overrides
+    the materials; without either only volume and CoG. Coordinates in each object's parent frame."""
+    d = _doc()
+    objs = [_obj(o) for o in objs] or _bodies(d)
+    out, tot_m, tot_v, mom = [], 0.0, 0.0, V()
+    for o in objs:
+        solids = o.Shape.Solids
+        if not solids:
+            raise FdmkitError(f'mass: {o.Name} has no solid')
+        v = sum(s.Volume for s in solids)
+        cog = sum((s.CenterOfMass * s.Volume for s in solids), V()) * (1 / v)
+        rho = density if density is not None else _density(o)
+        line = f'{o.Name}: V {v:.4g} mm³ CoG ({cog.x:.4g}, {cog.y:.4g}, {cog.z:.4g})'
+        if rho is not None:
+            m = v * rho / 1000                                  # g
+            line += f' m {m:.4g} g ({rho:g} g/cm³)'
+            if len(solids) == 1:                                # mm^5 × g/mm³ → kg·mm²
+                i1, i2, i3 = solids[0].PrincipalProperties['Moments']
+                line += f' I {i1 * rho / 1e6:.4g}/{i2 * rho / 1e6:.4g}/{i3 * rho / 1e6:.4g} kg·mm²'
+            tot_m += m
+            mom += cog * m
+        tot_v += v
+        out.append(line)
+    if len(objs) > 1 and tot_m:
+        c = mom * (1 / tot_m)
+        out.append(f'total: V {tot_v:.4g} mm³ m {tot_m:.4g} g CoG ({c.x:.4g}, {c.y:.4g}, {c.z:.4g})')
+    return 'mass: ' + ' | '.join(out)
 
 
 def reopen(hidden=False):
@@ -1155,6 +1499,130 @@ def reopen(hidden=False):
     nd.recompute()
     bad = [o.Name for o in nd.Objects if _bad(o)]
     return f'reopen: OK {nd.Name}' + (', errors ' + ','.join(bad) if bad else '')
+
+
+# ---------------------------------------------------------------- links and assembly
+_LINK_ARRAYS = {'linear': 'Part::LinkArrayLinear', 'polar': 'Part::LinkArrayPolar',
+                'path': 'Part::LinkArrayPath', 'point': 'Part::LinkArrayPoint'}
+
+
+def link_array(source, kind, count=None, step=None, axis=None, angle=360, path=None,
+               points=None, into=None, name=None):
+    """Part link array (26.3): instances of source as App::Link elements, no copied geometry;
+    Assembly joints can attach to any instance. linear: count, step apart along axis; polar:
+    count over angle about axis; path: count along path ('sketch.Edge1'); point: at the points
+    of a sketch. axis 'X'|'Y'|'Z' of the source's Origin, or an edge or datum line.
+    into = Assembly or App::Part to hold it (default: the document root)."""
+    if kind not in _LINK_ARRAYS:
+        raise FdmkitError(f"link_array: kind {', '.join(_LINK_ARRAYS)}")
+    d = _doc()
+    src = _obj(source)
+    if name:
+        _free(name)
+    holder = src if hasattr(src, 'Origin') else None
+    if axis in _ORIGIN and holder is None:
+        raise FdmkitError(f'link_array: {src.Name} has no Origin; give an edge or datum line')
+    f = d.addObject(_LINK_ARRAYS[kind], name or f'{kind}_array')
+    f.LinkedObject = src
+    if kind in ('linear', 'polar'):
+        if not isinstance(count, int) or count < 2 or axis is None:
+            raise FdmkitError(f'link_array {kind}: count >= 2 and axis needed')
+        f.Occurrences = count
+        if kind == 'linear':
+            if step is None:
+                raise FdmkitError('link_array linear: step needed')
+            f.Direction = _ref(axis, holder)
+            f.Mode = 'Spacing'
+            _setq(f, 'Offset', step)                # Spacing mode: Offset = distance between instances
+        else:
+            f.Axis = _ref(axis, holder)
+            _setq(f, 'Angle', angle)
+    elif kind == 'path':
+        if path is None or count is None:
+            raise FdmkitError('link_array path: path and count needed')
+        f.Path = _ref(path)
+        f.Count = count
+        f.RelativeToFirst = True
+    else:
+        if points is None:
+            raise FdmkitError('link_array point: points needed')
+        f.PointObject = _ref(points)
+        f.RelativeToFirst = True
+    if into:
+        _obj(into).addObject(f)
+    _rc(d)
+    if _bad(f) or f.ElementCount < 1:
+        raise FdmkitError(f'{f.Name}: {f.getStatusString()} elements {f.ElementCount}')
+    bb = f.Shape.BoundBox
+    return f'{f.Name}: OK {f.ElementCount} links of {src.Name} bb {bb.XLength:.1f}x{bb.YLength:.1f}x{bb.ZLength:.1f}'
+
+
+def _assembly_of(objs, who):
+    asm = next((p for p in objs[0].InList if p.TypeId == 'Assembly::AssemblyObject'), None)
+    if asm is None or any(asm not in o.InList for o in objs):
+        raise FdmkitError(f'{who}: parts must sit directly in one Assembly')
+    return asm
+
+
+def rigid_group(*parts, name=None):
+    """Assembly Rigid Group joint (26.3): the parts (Links of one Assembly) keep their relative
+    placements and move as one; replaces chains of Fixed joints."""
+    import JointObject
+    import UtilsAssembly
+    objs = [_obj(p) for p in parts]
+    if len(objs) < 2:
+        raise FdmkitError('rigid_group: at least 2 parts')
+    asm = _assembly_of(objs, 'rigid_group')
+    if name:
+        _free(name)
+    j = UtilsAssembly.getJointGroup(asm).newObject('App::FeaturePython', name or 'RigidGroupJoint')
+    JointObject.RigidGroupJoint(j, objs)
+    if App.GuiUp and j.ViewObject:
+        JointObject.ViewProviderRigidGroupJoint(j.ViewObject)
+    _rc(j.Document)
+    if _bad(j):
+        raise FdmkitError(f'{j.Name}: {j.getStatusString()}')
+    return f'{j.Name}: OK {len(objs)} parts in {asm.Name}'
+
+
+def _the_assembly(assembly):
+    if assembly:
+        return _obj(assembly)
+    asms = [o for o in _doc().Objects if o.TypeId == 'Assembly::AssemblyObject']
+    if len(asms) != 1:
+        raise FdmkitError(f'{len(asms)} assemblies: name one with assembly=')
+    return asms[0]
+
+
+def snapshot(name, assembly=None):
+    """Assembly Snapshot (26.3): store placements and visibility of the Assembly's movable parts
+    under name (a state such as 'open'/'locked'); called again with the same name it re-captures."""
+    import CommandCreateSnapshot as Snap
+    import UtilsAssembly
+    asm = _the_assembly(assembly)
+    s = _doc().getObject(name)
+    if s is None:
+        _free(name)
+        s = UtilsAssembly.getSnapshotGroup(asm).newObject('App::FeaturePython', name)
+        Snap.Snapshot(s)
+        if App.GuiUp and s.ViewObject:
+            Snap.ViewProviderSnapshot(s.ViewObject)
+    elif getattr(getattr(s, 'Proxy', None), 'captureState', None) is None:
+        raise FdmkitError(f'{name}: not a snapshot')
+    else:
+        s.Proxy.captureState(s)
+    return f'{s.Name}: OK {len(s.Components)} parts of {asm.Name}'
+
+
+def snapshot_restore(name, solve=True):
+    """Put the Assembly back into a stored snapshot; solve=True re-solves the joints after it
+    (joints win over the stored placements of jointed parts)."""
+    s = _obj(name)
+    if getattr(getattr(s, 'Proxy', None), 'restoreState', None) is None:
+        raise FdmkitError(f'{name}: not a snapshot')
+    s.SolveOnActivation = solve
+    s.Proxy.restoreState(s)
+    return f'{s.Name}: restored {len(s.Components)} parts'
 
 
 # ---------------------------------------------------------------- speed
@@ -2012,6 +2480,14 @@ def selftest():
             ck('polar_suppressed', "polar('pocket',4,suppressed=(2,))",
                lambda r: 'polar: OK' in r
                and list(d3.getObject('polar').SuppressedIndices) == [2])
+            ck('linear_grid', "sk('grid_sk','pattern_top'); circ('grid_sk',3,-15,-15); pocket('grid_sk',name='grid_hole'); "
+               "linear('grid_hole','X',2,step=30,direction2='Y',count2=2,suppressed=[(1,1)])",
+               lambda r: 'linear: OK' in r and list(d3.getObject('linear').SuppressedIndices) == [3]
+               and sorted({(round(e.Curve.Center.x), round(e.Curve.Center.y)) for e in d3.getObject('linear').Shape.Edges
+                           if hasattr(e.Curve, 'Radius') and abs(e.Curve.Radius - 1.5) < 1e-6})
+               == [(-15, -15), (-15, 15), (15, -15)])
+            ck('linear_extent', "linear('grid_hole','Y',3,extent=30,name='lin_ext')",
+               lambda r: 'lin_ext: OK' in r and d3.getObject('lin_ext').Mode == 'Extent')
             ck('thread_cosmetic', "sk('thread_sk','pattern_top'); circ('thread_sk',3); "
                "hole('thread_sk',3,thread_type='ISOMetricProfile')",
                lambda r: 'hole: OK' in r and d3.getObject('hole').CosmeticThread
@@ -2019,6 +2495,37 @@ def selftest():
             ck('chk_patterns', "chk()", lambda r: r.startswith('OK'))
         finally:
             App.closeDocument(d3.Name)
+            App.setActiveDocument(d.Name)
+        d6 = App.newDocument('fdmkit_regions', 'fdmkit_regions', True, True)
+        try:
+            App.setActiveDocument(d6.Name)
+            _init(d6)
+            ck('regions', "sk('reg_sk','XY'); rect('reg_sk',40,20); rect('reg_sk',8,8,-10,0); "
+               "rect('reg_sk',8,8,10,0); regions('reg_sk')",
+               lambda r: '3 regions' in r and 'A 672.0' in r and 'holes 2' in r)
+            ck('pad_at', "pad('reg_sk',6,name='base',at=(0,8))",
+               lambda r: abs(d6.getObject('base').Shape.Volume - 672 * 6) < 1e-6)
+            ck('pad_at_reference', "pad('reg_sk',12,name='boss',at=(-10,0),"
+               "start='reference',reference=('reg_sk',(-10,0)))",
+               lambda r: abs(_tipvol(d6) - (672 * 6 + 64 * 12)) < 1e-6
+               and d6.getObject('boss').StartType == 'Reference')
+            ck('pad_at_offset', "pad('reg_sk',2,name='cap',at=[(-10,0)],start='offset',offset=12)",
+               lambda r: abs(d6.getObject('cap').Shape.BoundBox.ZMax - 14) < 1e-6)
+            ck('pad_at_miss', "pad('reg_sk',2,at=(30,0))",
+               lambda r: r.startswith('ERR') and 'outside every region' in r)
+            ck('pocket_at', "pocket('reg_sk',2,name='notch',at=(0,8),start='offset',offset=-6)",
+               lambda r: 'notch: OK' in r and abs(d6.getObject('notch').Shape.Volume - (4928 - 672 * 2)) < 1e-6)
+            ck('undo_notch', "undo()", lambda r: d6.getObject('notch') is None)
+            ck('lid', "pad('reg_sk',9,name='lid',at=(10,0))", lambda r: 'lid: OK' in r)
+            ck('lint_lost_region', "s=App.ActiveDocument.reg_sk; s.delGeometries([i for i,g in "
+               "enumerate(s.Geometry) if hasattr(g,'StartPoint') and 5<min(g.StartPoint.x,g.EndPoint.x) "
+               "and max(g.StartPoint.x,g.EndPoint.x)<15]); App.ActiveDocument.recompute(); lint()",
+               lambda r: 'lid.Profile: lost' in r and 'remap' in r)
+            ck('remap', "remap('lid',(0,8))",
+               lambda r: 'lid: OK' in r and d6.getObject('lid').Profile[1] == ['InternalFace1']
+               and abs(d6.getObject('lid').Shape.BoundBox.ZMax - 14) < 1e-6)
+        finally:
+            App.closeDocument(d6.Name)
             App.setActiveDocument(d.Name)
         d4 = App.newDocument('fdmkit_existing_helpers', 'fdmkit_existing_helpers', True, True)
         try:
@@ -2096,6 +2603,90 @@ def selftest():
                and not [o for o in d6.Objects if o.TypeId.startswith('Path') or getattr(o, 'BitBody', None)])
         finally:
             App.closeDocument(d6.Name)
+            App.setActiveDocument(d.Name)
+        d7 = App.newDocument('fdmkit_271_patterns', 'fdmkit_271_patterns', True, True)
+        try:
+            import FreeCADGui as Gui
+            App.setActiveDocument(d7.Name)
+            _init(d7)
+            ck('pat_base', "sk('b7','XY'); rect('b7',60,60); pad('b7',8)", lambda r: 'bb 60.0x60.0x8.0' in r)
+            ck('midplane', "plane('t7','XY',8); midplane('m7','XY','t7')", lambda r: 'm7: OK at (0, 0, 4)' in r)
+            ck('pat_hole', "sk('h7','m7'); circ('h7',3,10,0); pocket('h7', side='sym')", lambda r: 'pocket: OK' in r)
+            ck('circular', "circular('pocket', 2, 8, 5, symmetry=6)",
+               lambda r: 'circular: OK' in r and _body(d7).Tip.Name == 'circular')
+            ck('pattern_tip', "sk('r7','t7'); circ('r7',3,-20,-20); pocket('r7', name='row7')",
+               lambda r: 'row7: OK' in r and d7.getObject('row7').BaseFeature.Name == 'circular')
+            hv = math.pi * 1.5 ** 2 * 8
+            v0 = d7.getObject('row7').Shape.Volume
+            ck('path_pattern', "sk('p7','XY'); poly('p7', [(-20,-20),(20,-20),(20,-19)]); "
+               "path_pattern('row7','p7.Edge1',count=5)",
+               lambda r: 'path_pattern: OK' in r
+               and abs((v0 - d7.getObject('path_pattern').Shape.Volume) / hv - 4) < 1e-6)
+            ck('point_noop', "sk('q1','XY'); circ('q1',1,-20,20); point_pattern('row7','q1')",
+               lambda r: 'changed nothing' in r and d7.getObject('q1') is None)
+            ck('point_pattern', "sk('q3','XY'); circ('q3',1,-20,-20); circ('q3',1,0,25); "
+               "point_pattern('row7','q3')", lambda r: 'point_pattern: OK' in r)
+            cyl = [f'Face{i}' for i, f in enumerate(d7.getObject('circular').Shape.Faces, 1)
+                   if f.Surface.TypeId == 'Part::GeomCylinder' and abs(f.Surface.Radius - 1.5) < 1e-6]
+            Gui.Selection.clearSelection()
+            for f in cyl[:2]:
+                Gui.Selection.addSelection(d7.Name, _body(d7).Name, f'circular.{f}')
+            ck('sel_axes', "?sel()", lambda r: 'angle 0°' in r and 'apart' in r and ' D3 ' in r)
+            Gui.Selection.clearSelection()
+            ck('mass', "mass(density=7.85)", lambda r: r.startswith('mass: Body: V') and '7.85 g/cm³' in r)
+            ck('link_linear', "link_array('Body','linear',count=3,step=70,axis='X')",
+               lambda r: '3 links' in r and 'bb 200.0x60.0x8.0' in r)
+            ck('link_polar', "link_array('Body','polar',count=4,axis='Z',name='ring4')", lambda r: '4 links' in r)
+            asm = d7.addObject('Assembly::AssemblyObject', 'Assembly')
+            asm.newObject('Assembly::JointGroup', 'Joints')
+            links = []
+            for i, x in enumerate((0, 80)):
+                lk = asm.newObject('App::Link', f'L{i + 1}')
+                lk.LinkedObject, lk.Placement.Base = _body(d7), V(x, 0, 0)
+                links.append(lk)
+            d7.recompute()
+            ck('rigid_group', "rigid_group('L1','L2')", lambda r: 'RigidGroupJoint: OK 2 parts' in r)
+            ck('snapshot', "snapshot('open')", lambda r: 'open: OK 2 parts' in r)
+            links[1].Placement.Base = V(120, 0, 0)
+            ck('snapshot_restore', "snapshot_restore('open', solve=False)",
+               lambda r: 'restored 2' in r and abs(links[1].Placement.Base.x - 80) < 1e-9)
+            ck('chk_271_patterns', "chk()", lambda r: r.startswith('OK'))
+        finally:
+            App.closeDocument(d7.Name)
+            App.setActiveDocument(d.Name)
+        d8 = App.newDocument('fdmkit_271_features', 'fdmkit_271_features', True, True)
+        try:
+            App.setActiveDocument(d8.Name)
+            _init(d8)
+            ck('rot_base', "sk('c8','XY'); circ('c8',40); pad('c8',10)", lambda r: 'bb 40.0x40.0x10.0' in r)
+            ck('groove_up_to_face', "sk('g8','XZ'); rect('g8',2,2,19,5); "
+               "groove('g8', axis='Z', type='up_to_face', up_to='YZ')",
+               lambda r: 'groove: OK V 12447.0' in r and d8.getObject('groove').Type == 'UpToFace')
+            ck('groove_through', "sk('g9','XZ'); rect('g9',2,1,-19,1); groove('g9', axis='Z', type='through', name='ring')",
+               lambda r: 'ring: OK' in r and d8.getObject('ring').Type == 'ThroughAll')
+            ck('type_check', "sk('g10','XZ'); rect('g10',1,1,19,8); groove('g10', type='up_to_face')",
+               lambda r: 'needs up_to' in r and d8.getObject('g10') is None)
+            d8.addObject('PartDesign::Body', 'Shell')     # Thickness fails on the grooved solid (OCC)
+            ck('rot_hole', "sk('c9','XY'); circ('c9',40); pad('c9',10,name='shell_pad'); "
+               "plane('t8','XY',10); sk('h8','t8'); circ('h8',6,10,0); pocket('h8',4)",
+               lambda r: 'pocket: OK' in r and _body(d8).Name == 'Shell')
+            pk = d8.getObject('pocket')
+            hole_faces = [f'pocket.Face{i}' for i, f in enumerate(pk.Shape.Faces, 1)
+                          if (f.Surface.TypeId == 'Part::GeomCylinder' and f.Surface.Radius < 5)
+                          or (f.Surface.TypeId == 'Part::GeomPlane' and abs(f.BoundBox.ZMax - 6) < 1e-6
+                              and f.BoundBox.XLength < 7)]
+            vfull = d8.getObject('shell_pad').Shape.Volume
+            ck('defeature', f"defeature({hole_faces!r})",
+               lambda r: 'defeature: OK' in r and abs(d8.getObject('defeature').Shape.Volume - vfull) < 1e-3)
+            df = d8.getObject('defeature')
+            top = next(f'defeature.Face{i}' for i, f in enumerate(df.Shape.Faces, 1)
+                       if f.Surface.TypeId == 'Part::GeomPlane' and abs(f.BoundBox.ZMin - 10) < 1e-6)
+            ck('thickness', f"thickness({top!r}, 1)",
+               lambda r: 'thickness: OK' in r and 'bb 40.0x40.0x10.0' in r
+               and d8.getObject('thickness').Shape.Volume < vfull / 3)
+            ck('chk_271_features', "chk()", lambda r: r.startswith('OK'))
+        finally:
+            App.closeDocument(d8.Name)
             App.setActiveDocument(d.Name)
     finally:
         App.closeDocument(d.Name)

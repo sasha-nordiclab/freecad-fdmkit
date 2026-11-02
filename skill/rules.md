@@ -6,7 +6,7 @@
 - Keep custom printable parts as native, fully constrained parametric geometry. Create custom hardware or adapters when no suitable standard solution meets the requirements. A verified envelope is enough when detailed hardware geometry is unnecessary.
 
 ## Standard workbenches for each job
-Use FreeCAD's own tools and workbenches instead of hand-made scripts or geometry. Installed in FreeCAD 26.3 (built-in + user `Mod`):
+Use FreeCAD's own tools and workbenches instead of hand-made scripts or geometry. Installed in FreeCAD 27.1 weekly, with the 26.3 features (built-in + user `Mod`):
 
 | Workbench | Use it for | Not for |
 | --- | --- | --- |
@@ -157,6 +157,14 @@ Use this for new multi-part models and when migrating an existing model built in
 - Create a separate datum plane only when it defines a meaningful independent reference or orientation. Do not add one plane merely to place each parallel sketch at a different Z level.
 - Build one complete repeated feature before patterning it, when the native pattern can include its constituent features. After simplifying the tree, verify sketch DoF 0, feature validity, and the final shape against the prior model.
 
+## Sketch regions (26.3 sketch internals, 2026-11-02)
+Source: MangoJelly "FreeCAD 26.3 Sketch Internals" (2026-10-31), probed on the 27.1 weekly.
+- A sketch with `MakeInternals` on exposes every closed region as `InternalFaceN`: overlapping contours split into separate regions, a contour inside another is a hole of the outer region and a region of its own. `pad`/`pocket(..., at=(x, y))` (sketch coordinates, params allowed) turns MakeInternals on and uses only the regions under the points; without `at` the whole sketch is the profile as before.
+- Use one master sketch when the profiles share centres, pitches or symmetry (a base with bosses and pockets at different levels: `start='offset'`). Keep separate sketches when the profiles sit on different planes or the regions keep changing identity; a clear tree beats fewer sketches.
+- Pick regions by a point, never by `InternalFaceN`: the numbers follow the region order and change when contours are added or deleted. FreeCAD remaps a feature's reference when another contour is deleted (`InternalFace3` became `InternalFace2` and kept its geometry), but a feature whose own region vanished keeps `?InternalFaceN`, turns Invalid and keeps showing the old shape. `lint()` reports it; repair with `remap(feature, (x, y))` (`remap(feature)` = whole sketch), then `check()`.
+- A region is a start reference too: `start='reference', reference=(sk, (x, y))`. Do not confuse a feature's regions (`Profile`, shown in the GUI as Support) with the sketch's Attachment: a sketch that moved as a whole is an attachment problem.
+- Start offset runs along the feature's own direction: a pad's offset is along the sketch normal, a pocket's along its cut, so `pocket(sk, 2, start='offset', offset=-6)` cuts 4..6 above the sketch; `reverse=True` flips both. A pocket that misses the solid is an ERR.
+
 ## Feature order and checks after every change
 - Material that surrounds a hole (bosses, pads) goes **before** the hole in the tree, so the hole cuts it.
 - One-sided ThroughAll holes and pockets cut only from their sketch plane forward.
@@ -184,12 +192,31 @@ Use this for new multi-part models and when migrating an existing model built in
   - A Body's `BaseFeature` taken from another Body uses that Body's global placement and is not recomputed when the source moves through expressions (it went stale and collided). Build the variant as its own Body from the same params instead.
   - `Spreadsheet.removeRows()` shifts the cells but leaves stale computed values: dependent cells and features then recompute with old numbers (seen 2026-10-18: `drum_y0` −168.8 instead of −138). After removing or inserting rows, touch every used cell (`sheet.touchCells(c)`), `sheet.recompute()`, `doc.recompute()`, and re-read a few derived values before saving.
   - `Spreadsheet.clearAll()` is not undone by `abortTransaction`; rewrite and clear cells one by one.
-  - A PartDesign pattern created from Python does not become the Tip; set `body.Tip` to it.
+  - A PartDesign pattern created from Python does not become the Tip, so later features skip it; fdmkit's pattern calls set `body.Tip`, raw scripts must too.
   - A Hole needs its base recomputed before its properties are set.
 
 ## Modelling
 - Rounds go in sketches (`fil`), not as fillets on complex edges.
 - Thin wall mount: countersunk screws plus a separate backing plate Body with nut pockets, printed flat.
+
+## FreeCAD 26.3 / 27.1 features: which call (2026-10-31)
+Source: official release notes 26.3 and the 27.1 weekly changes; each call is probed and in `selftest()`.
+- Symmetric datum: `midplane(name, a, b)` (MidPlane attachment) instead of a datum offset by half a param; it follows both faces/planes when they move.
+- Rotational features: `project_axis=True` revolves about an axis outside the sketch plane (an origin axis or another feature's edge); `type='up_to_face', up_to=` ends a Revolution/Groove at a datum or face, `type='through'` grooves all round.
+- Patterns: one semantic feature, then repeat it; never one pocket per hole. `linear` for a row, or a grid with `direction2`/`count2` (2x2 mount holes from one hole, the pitch a param; skip a corner with `suppressed=[(1, 1)]`); `polar` for one ring; `circular` for concentric rings spaced by `radial` with instances `tangential` apart; `path_pattern` along an edge or sketch (first instance = the original, `align=True` turns instances with the tangent); `point_pattern` at the circle centres of a sketch (the first centre marks the original). Suppress single instances with `suppressed=` instead of extra features. A pattern that changes nothing is an ERR.
+- `defeature(faces)` removes holes/fillets/bosses from an imported or base feature and heals the solid; keep native features for own geometry.
+- `thickness(faces, value)`: shell with the faces removed; `mode='recto_verso'` puts half the wall on each side. OCC fails on solids with grooves or many details (`Failed to make thick solid`): shell the simple solid first, then add details.
+- `mass(*objs, density=)`: volume, mass, CoG and principal moments (Std_MassProperties exists only as a task panel). Material density is used unless the object has FreeCAD's 'Default' material.
+- `sel()` with two holes/circles/edges gives the angle between axes and, for parallel ones, the distance of the axes (26.3 Measure does the same in the GUI).
+- Assembly: `link_array()` (Part link arrays) for repeated purchased/identical parts — App::Link instances, no copied geometry, joints attach to any instance, `into=` puts the array into the Assembly. `rigid_group(*links)` instead of chains of Fixed joints. `snapshot(name)` stores a functional pose (open/locked) of free parts; `snapshot_restore(name, solve=True)` re-solves afterwards, so jointed parts follow their joints.
+- Revolution/Groove `start='offset'` takes an angle (StartOffset is a PropertyAngle).
+- Coaxial stepped parts (bushings, collars): compare one axial-section sketch + `revolve` with a master sketch of concentric circles + `pad(at=..., start='offset')`; usually the revolve is simpler and sturdier. Use regions when the steps are not round or share a non-axial layout.
+- One sketch per meaningful set of related dimensions (envelope, mount points, ribs), not one per feature and not one giant master sketch; a master sketch whose regions keep changing count is a reason to split it.
+- Sketcher Text and the Group constraint (26.3) are experimental and GUI-only: `Sketcher_CreateText` exists, but a Text constraint cannot be built from Python (probed 27.1 weekly), and Group needs the hidden development preview. Do not use either in a model; for lettering use a stable text workflow and check stroke width (>= 2 lines) and gaps.
+- Recompute: `EnableAsyncRecompute` (26.3, on by default) only affects GUI commands; `fdmkit.run` recomputes synchronously. After `Gui.runCommand(...)` wait and re-read the state before using the result.
+- PartDesign Boolean tool bodies keep their own placement (26.3): no resetting to the origin before a Boolean.
+- GUI-only, no fdmkit call: Sketcher dimension tools pick model edges directly (auto external geometry), broken external geometry is flagged in the tree, vertical spreadsheet configuration tables, several documents editable at once with separate undo, experimental fine-grained recompute (a preference; leave off).
+- 27.1 weekly fix: spreadsheet values keep their precision after save/reopen (PR #32464); sheet-expression delete segfault, `exportPageAsPdf` crash and chamfer hangs are untested on 27.1 — keep the workarounds.
 
 ## Lightening: recesses and thin walls before windows
 - Through windows in thin walls cost print time: each one adds perimeters and travel. Measured on a 3 mm wall: windows −14 g but +26 min against solid walls.
@@ -285,6 +312,7 @@ The user waits for every call; slow work is a defect. A full recompute of a docu
 - Holes: ISO tap drills (M1 0.75, M1.2 0.95, M1.6 1.25, M3 2.5), ISO 273 clearance, standard screws; radial hole sketches 1 mm outside the cylinder; drilled depth ≤ 8 × Ø. Press-fit pins nominal in nominal (drawing m6/H7).
 - Walls ≥ 0.3 until the material is chosen (then from the material); lathe grooves ≥ 0.5 (insert width).
 - Check with `cnc()` after every change, with `check()` and `lint()`. `cnc()` sees each Body as one workpiece; `skip=` leaves out non-machined Bodies (films, purchased parts). `cnc_show()` paints the faces, `cnc_restore()` puts the colours back.
-- Show the cutter with native CAM, not with drawn tool shapes: `cam_job(name, body, stock=<feature before the setup>, azimuth=<A index>)`, `cam_slot(job, p1, p2, depth)` with points in part coordinates, `cam_sim(job)` opens CAM_SimulatorGL. CAM 26.3 has no lathe operations (the Lathe job type is hidden), and opencamlib (3D Surface, Waterline, Rotary Surface) has no wheel for Python 3.13.
+- Show the cutter with native CAM, not with drawn tool shapes: `cam_job(name, body, stock=<feature before the setup>, azimuth=<A index>)`, `cam_slot(job, p1, p2, depth)` with points in part coordinates, `cam_sim(job)` opens CAM_SimulatorGL. CAM has no lathe operations (the Lathe job type is hidden).
+- CAM 26.3/27.1 (not wrapped in fdmkit): per-operation Workplanes give native 3+2 indexing, but the paths are stored in the plane frame and CAM_SimulatorGL is 3-axis, so `cam_job(azimuth=)` stays the way to show a setup. Rotary Surface (4th-axis surfacing, out of experimental) and Planar Surface need opencamlib, which the 27.1 bundle has (`import opencamlib`; 26.3 had none), and Rotary Surface also needs a Job Machine with a rotary axis from the CAM Machine Library (Preferences → CAM → Machines). Machine-based post processors: LinuxCNC (tilted work planes), Fanuc, Heidenhain. Use them only when the user sets up real G-code output.
 - Remove a Job only with `cam_del()` (CAM's own teardown); deleting the Job object by hand leaves model clones, tool bits and their shape Bodies behind.
 - CAM_SimulatorGL opens as an MDI tab; while it is in front, `Gui.ActiveDocument.ActiveView` is that tab (`MDIViewPy`, no `viewAxonometric`), so view code and macros silently skip the camera. Use `gdoc.mdiViewsOfType('Gui::View3DInventor')[0]` (and `Gui.activateView('Gui::View3DInventor', True)` to bring it to the front). Show-all macros hide `Path::` objects and the tool bits' shape Bodies.

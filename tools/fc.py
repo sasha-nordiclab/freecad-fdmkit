@@ -9,7 +9,7 @@ import os
 import sys
 import xmlrpc.client
 
-MOD = os.path.expanduser('~/Library/Application Support/FreeCAD/v26-3/Mod/fdmkit')
+MOD = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the repo, whatever FreeCAD version links it
 URL = os.environ.get('FREECAD_RPC', 'http://127.0.0.1:9875')
 
 

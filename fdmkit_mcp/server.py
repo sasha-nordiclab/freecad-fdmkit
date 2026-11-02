@@ -24,12 +24,34 @@ slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r)
 half(sk) cuts a sketch symmetric about its H axis to y>=0, in place
 pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through',reverse) | revolve(sk,angle=360,axis='V_Axis'|'Z')
 26.3 starts: pad/pocket/revolve/groove(...,start='profile'|'offset'|'reference',
-offset=expr,reference='XY'|datum); pocket/groove/hole(...,operation='subtract'|'common')
+offset=expr,reference='XY'|datum|(sk,(x,y))); pocket/groove/hole(...,operation='subtract'|'common')
+Offset runs along the feature: pad +normal, pocket into the cut (pocket offset=-6 starts 6 above).
+Sketch regions (26.3 internals): pad/pocket(...,at=(x,y)|[(x,y),...]) use only the closed
+regions under those sketch-coord points, so one master sketch drives several features;
+regions(sk) lists InternalFaceN, area, an inner point, holes. Pick by point, never by N.
+After a sketch edit lint() reports 'lost ?InternalFaceN' (the feature keeps a stale
+shape); remap(feature,(x,y),...) re-picks the regions, remap(feature) = whole sketch.
 hole(sk,diameter,depth='through',thread_type=None,thread_size=None,
 model_thread=False,cosmetic_thread=True) | groove(sk,angle=360,axis='V_Axis'|'Z')
+revolve/groove(...,project_axis=True (axis outside the sketch plane), type='angle'|'up_to_face'|
+'up_to_first'|'up_to_last'(revolve)|'through'(groove), up_to=plane|'Feature.FaceN')
+midplane(name,a,b) datum midway between two planes/faces (bisector if not parallel)
+Refs: origin key 'XY'/'Z', object name, or 'Feature.Face3'/'sketch.Edge1' as sel() prints.
+linear(features,'X'|'Feature.EdgeN',count,step=|extent=,direction2=,count2=1,suppressed=[i|(i,j)])
+one feature for a row or a grid (2x2 mount holes); step2/extent2 default to step/extent
 polar(features,occurrences,axis='Z',angle=360,suppressed=()) indices are zero-based
+circular(features,rings,radial,tangential,axis='Z',symmetry=1) concentric circles |
+path_pattern(features,path,count=None,spacing=None,align=False) first instance = original |
+point_pattern(features,sketch) at circle centres, the first centre marks the original.
+Every pattern becomes the Body Tip; a pattern that changes nothing is an ERR.
+defeature(['Feature.Face7',...]) removes faces and heals | thickness(faces,value,
+mode='skin'|'recto_verso',join='arc'|'intersection',inward=True) shell; fails on complex solids
 mirror([features],plane='XY'|datum) PartDesign::Mirrored | move(feature, after)
 dim(sk,'r1_w',val) | chk() | why(name) | tree() | undo() | selftest() | reload()
+mass(*objs,density=g/cm³) = V, m, CoG, principal I (materials' density unless 'Default')
+LINKS/ASSEMBLY: link_array(source,'linear'|'polar'|'path'|'point',count,step,axis,angle,path,
+points,into=assembly) = App::Link instances, joints attach to any | rigid_group(*links) joint |
+snapshot(name) store/re-capture placements+visibility | snapshot_restore(name,solve=True)
 SPEED: '?expr' = read-only (no transaction/recompute); '?' only at the very start, never
 mid-batch: write steps and the read go in separate calls. focus('Body',...) = recompute only
 those Bodies + params until full(); full() = one recompute + Assembly solve.
@@ -37,11 +59,12 @@ freeze('Name',...) / thaw(...) = Std_ToggleFreeze heavy objects (Assembly, gears
 freeze_all() / thaw_all() = every non-link object (animations); then full().
 i10g_video() = render the i10g Animation async (hidden links dropped); wait for ffmpeg.
 CHECK: check() = whole document: one valid solid per Body, no errors, DoF 0, no Body
-intersections, every Fasteners object on a hole axis | lint() = traps: hole sketch tangent
+intersections, every Fasteners object on a hole axis | lint() = traps: lost sketch regions/refs, hole sketch tangent
 to a cylinder, countersink apex on the hole floor, sketches placed by plain numbers,
 cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set,
-check(), restore (stress test) | sel() = GUI selection + distance | reopen() = save,
-close, open, recompute. TechDraw: SVG export only (exportPageAsPdf crashes 26.3).
+check(), restore (stress test) | sel() = GUI selection + distance, angle of axes/normals,
+distance of parallel hole axes, diameters | reopen() = save, close, open, recompute.
+TechDraw: SVG export only (exportPageAsPdf crashes 26.3; untested on 27.1).
 CNC (metal, lathe + 4-axis mill, A = part Z; cutter Ø = 2 x params.CncCornerRadius or cutter=):
 cnc(*bodies, skip=(), cutter=None, holes=False) = sharp inside corners without a floor the
 cutter reaches (stick-out <= 6 Ø), fillets < cutter R, unreachable milled faces, slots < Ø or
@@ -94,7 +117,7 @@ INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
 8. Reply OK / errors / numbers. No exports unless asked (temp FEM files in scratchpad,
    deleted after). Renders: white, pastel, no text; colour = deflection.
 9. At the start of work in each CAD project, immediately create or update that project's
-   AGENTS.md as a handoff for the next AI: purpose, current model and parameters,
+   AGENTS.md as a handoff for the next AI: FreeCAD version and build (?App.Version()), purpose, current model and parameters,
    verified state, decisions, open questions, and how to resume through this MCP.
    Keep it current after each substantive model change; do not wait until the end.
 10. Move the FreeCAD camera freely as needed while working. After all model operations,
@@ -174,7 +197,7 @@ def handle(msg):
     if method == 'initialize':
         result = {'protocolVersion': msg.get('params', {}).get('protocolVersion', '2025-06-18'),
                   'capabilities': {'tools': {}},
-                  'serverInfo': {'name': 'fdmkit', 'version': '0.2.0'},
+                  'serverInfo': {'name': 'fdmkit', 'version': '0.3.0'},
                   'instructions': INSTRUCTIONS}
     elif method == 'tools/list':
         result = {'tools': [TOOL]}
