@@ -46,17 +46,40 @@ def _doc():
     return d
 
 
-def _body(d=None):
-    d = d or _doc()
-    if App.GuiUp:
-        import FreeCADGui as Gui
+def _bits(d):
+    """Names of the shape Bodies of CAM tool bits."""
+    return {o.BitBody.Name for o in d.Objects if getattr(o, 'BitBody', None) is not None}
+
+
+def _active_body(d):
+    """The GUI active Body of any 3D view of d (a CAM simulator or sheet tab may be in front)."""
+    if not App.GuiUp:
+        return None
+    import FreeCADGui as Gui
+    gd = Gui.getDocument(d.Name)
+    views = [gd.ActiveView] if gd and gd.ActiveView else []
+    try:
+        views += list(gd.mdiViewsOfType('Gui::View3DInventor'))
+    except Exception:
+        pass
+    for v in views:
         try:
-            b = Gui.getDocument(d.Name).ActiveView.getActiveObject('pdbody')
+            b = v.getActiveObject('pdbody')
             if b:
                 return b
         except Exception:
             pass
-    bodies = [o for o in d.Objects if o.TypeId == 'PartDesign::Body']
+    return None
+
+
+def _body(d=None):
+    """The active Body, else the last part Body (never a CAM tool bit's Body)."""
+    d = d or _doc()
+    b = _active_body(d)
+    if b:
+        return b
+    bits = _bits(d)
+    bodies = [o for o in d.Objects if o.TypeId == 'PartDesign::Body' and o.Name not in bits]
     if not bodies:
         raise FdmkitError('no Body; new(name)')
     return bodies[-1]
@@ -131,7 +154,9 @@ def _expr(v):
     d = App.ActiveDocument
     s = d and _sheet(False, d)
     names = set(_aliases(s)) if s else set()
-    return _ID.sub(lambda m: f'{s.Name}.{m[1]}' if m[1] in names else m[1], str(v))
+    text = str(v)
+    return _ID.sub(lambda m: f'{s.Name}.{m[1]}' if m[1] in names
+                   and not re.match(r'\s*\(', text[m.end():]) else m[1], text)
 
 
 def _val(o, v):
@@ -157,6 +182,11 @@ def P(*names, **values):
     """P(wall=1.2, h2='wall*2') sets; P() lists; P('wall') reads."""
     s = _sheet()
     al = _aliases(s)
+    unknown = [k for k in names if k not in al]
+    if unknown:
+        raise FdmkitError(f'P: no param {", ".join(unknown)}; P() lists them')
+    d = _doc()
+    before = {o.Name for o in _scope(d) if _bad(o)} if values else set()
     for k, v in values.items():
         cell = al.get(k)
         if cell is None:
@@ -174,17 +204,24 @@ def P(*names, **values):
         else:
             s.set(cell, _cell(v))
     if values:
-        d = _doc()
         _rc(d)
-        bad = [o for o in _scope(d) if _bad(o)]
+        bad = [o for o in _scope(d) if _bad(o) and o.Name not in before]
         if bad:
             raise FdmkitError('P: ' + '; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
     keys = names or (values.keys() if values else al.keys())
-    return 'P: ' + ' '.join(f'{k}={_num(s.get(k))}' for k in keys)
+    return 'P: ' + ' '.join(f'{k}={_pval(s, k)}' for k in keys)
+
+
+def _pval(s, k):
+    try:
+        return _num(s.get(k))
+    except Exception:       # text or an error value in the cell
+        return repr(str(s.get(k)))
 
 
 class _SheetObserver:
-    """Work around 26.3dev: changing an aliased cell does not touch dependents."""
+    """Work around 26.3: changing an aliased cell does not touch dependents. Installed only
+    before 27.1, where it made every P() recompute every sheet-dependent object."""
 
     def slotChangedObject(self, obj, prop):
         try:
@@ -267,7 +304,8 @@ def sk(name, on='XY'):
     s.AttachmentSupport = [(ref, '')]
     s.MapMode = 'FlatFace'
     _rc(s.Document)
-    return f'{name}: OK on {on}'
+    several = sum(o.TypeId == 'PartDesign::Body' for o in s.Document.Objects) - len(_bits(s.Document)) > 1
+    return f'{name}: OK on {on}' + (f' in {b.Name}' if several else '')
 
 
 # ---------------------------------------------------------------- sketch
@@ -315,7 +353,10 @@ def _cname(s, i1):
 
 
 def _sk_issue(s):
-    s.solve()
+    # DoF and the conflict lists are stored and survive a reopen; solving an up-to-date sketch
+    # would only mark it Touched (recompute debt for the next call) and add an undo step
+    if 'Touched' in s.State or 'Invalid' in s.State:
+        s.solve()
     out = []
     for attr, tag in (('ConflictingConstraints', 'conflict'), ('RedundantConstraints', 'redundant'),
                       ('PartiallyRedundantConstraints', 'partial'), ('MalformedConstraints', 'malformed')):
@@ -323,6 +364,8 @@ def _sk_issue(s):
         if ids:
             out.append(tag + ' ' + ','.join(_cname(s, i) for i in ids))
     if s.DoF:
+        if not s.getGeometryWithDependentParameters():
+            s.solve()
         free = dict.fromkeys(f'g{g}.{_POS.get(p, p)}' for g, p in s.getGeometryWithDependentParameters())
         out.append(f'DoF {s.DoF} free ' + ' '.join(free))
     if _bad(s):
@@ -449,9 +492,16 @@ def dim(sketch, cname, value):
         s.setExpression('Constraints.' + cname, _expr(value))
     else:
         s.setExpression('Constraints.' + cname, None)
-        s.setDatum(i, float(value))
+        s.setDatum(i, App.Units.Quantity(f'{float(value)} deg') if s.Constraints[i].Type == 'Angle'
+                   else float(value))
     _rc(s.Document)
-    r = chk()
+    b = s.getParentGeoFeatureGroup()
+    if b is None or b.TypeId != 'PartDesign::Body' or b.Tip is None:
+        err = _sk_issue(s)        # no solid yet: the sketch is all there is to check
+        if err:
+            raise FdmkitError(f'{s.Name}: {err}')
+        return f'{s.Name}.{cname}: OK DoF 0'
+    r = chk(b)
     if r.startswith('ERR'):
         raise FdmkitError(r[4:])
     return f'{s.Name}.{cname}: ' + r
@@ -758,12 +808,26 @@ def _setq(o, prop, v):
         setattr(o, prop, v)
 
 
+def _pick(table, value, arg):
+    """table[value], or an FdmkitError listing the accepted values."""
+    try:
+        return table[value]
+    except (KeyError, TypeError):
+        raise FdmkitError(f'{arg}={value!r}: expected {", ".join(map(str, table))}') from None
+
+
+def _sketch_body(s):
+    """The Body that owns sketch s (a feature must live there), else the active Body."""
+    b = s.getParentGeoFeatureGroup()
+    return b if b is not None and b.TypeId == 'PartDesign::Body' else _body()
+
+
 def _feature(kind, name, sketch, at=None):
     if name:
         _free(name)
     s = _sk(sketch)
     sub = _region_names(s, at) if at is not None else None
-    f = _body().newObject(kind, name or kind.split('::')[1].lower())
+    f = _sketch_body(s).newObject(kind, name or kind.split('::')[1].lower())
     f.Profile = (s, sub) if sub else s
     return f, s
 
@@ -775,11 +839,13 @@ def _finish(f, s):
     bad = [o for o in (s, f) if o and _bad(o)]
     if bad:
         raise FdmkitError('; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
-    if not f.Shape.isValid() or len(f.Shape.Solids) != 1:
-        raise FdmkitError(f'{f.Name}: solids {len(f.Shape.Solids)}')
-    if prev and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
-        raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); '
-                          'profile misses the solid or points away: try reverse=True')
+    if f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
+        raise FdmkitError(f'{f.Name}: ' + ('no shape' if f.Shape.isNull() else f'solids {len(f.Shape.Solids)}'))
+    if prev and not prev.Shape.isNull() and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
+        hint = ('profile misses the solid or points away: try reverse=True'
+                if 'Reversed' in f.PropertiesList and f.TypeId != 'PartDesign::Thickness'
+                else 'nothing to cut or remove there')
+        raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); {hint}')
     if s:
         s.Visibility = False
     if prev:
@@ -838,60 +904,93 @@ def _set_operation(f, operation):
     f.Operation = value
 
 
+def _set_side(f, side, length2):
+    """SideType; side='two' needs its own second length (FreeCAD's hidden default is 5-10 mm)."""
+    f.SideType = _pick(_SIDES, side, 'side')
+    if (side == 'two') != (length2 is not None):
+        raise FdmkitError("side='two' needs the second length (length2/depth2), other sides take none")
+    if length2 == 'through':
+        f.Type2 = 'ThroughAll'
+    elif length2 is not None:
+        f.Type2 = 'Length'
+        _setq(f, 'Length2', length2)
+
+
 def pad(sketch, length, name=None, side='one', reverse=False,
-        start='profile', offset=0, reference=None, at=None):
+        start='profile', offset=0, reference=None, at=None, length2=None):
     """at: (x, y) or [(x, y), ...] in sketch coords picks only the regions under
-    those points (26.3 sketch internals); None pads the whole sketch."""
+    those points (26.3 sketch internals); None pads the whole sketch.
+    side='two' pads length one way and length2 the other."""
     f, s = _feature('PartDesign::Pad', name, sketch, at)
     _setq(f, 'Length', length)
-    f.SideType = _SIDES[side]
+    _set_side(f, side, length2)
     f.Reversed = reverse
     _set_start(f, start, offset, reference)
     return _finish(f, s)
 
 
 def pocket(sketch, depth='through', name=None, side='one', reverse=False,
-           start='profile', offset=0, reference=None, operation='subtract', at=None):
+           start='profile', offset=0, reference=None, operation='subtract', at=None, depth2=None):
     f, s = _feature('PartDesign::Pocket', name, sketch, at)
     if depth == 'through':
         f.Type = 'ThroughAll'
     else:
         _setq(f, 'Length', depth)
-    f.SideType = _SIDES[side]
+    _set_side(f, side, depth2)
     f.Reversed = reverse
     _set_start(f, start, offset, reference)
     _set_operation(f, operation)
     return _finish(f, s)
 
 
+_DRILL = {'flat': 'Flat', 'angled': 'Angled'}
+
+
 def hole(sketch, diameter, depth='through', name=None, start='profile',
          offset=0, reference=None, thread_type=None, thread_size=None,
-         model_thread=False, cosmetic_thread=True, operation='subtract'):
-    """PartDesign Hole on fully constrained circle centres; cosmetic thread is metadata."""
+         model_thread=False, cosmetic_thread=True, operation='subtract', drill_point='flat'):
+    """PartDesign Hole on fully constrained circle centres; cosmetic thread is metadata.
+    Threaded: diameter is the nominal size (4 -> M4x0.7) unless thread_size is given;
+    FreeCAD then sets the tap drill diameter. drill_point='angled' adds the 118° cone
+    BELOW depth (it can pierce a thin floor); 'flat' keeps the floor at depth."""
+    if thread_type is None and (thread_size is not None or model_thread):
+        raise FdmkitError('hole: thread_type required for thread_size or model_thread')
+    point = _pick(_DRILL, drill_point, 'drill_point')
     f, s = _feature('PartDesign::Hole', name, sketch)
     _rc(f.Document)  # Hole populates its dynamic properties after a base recompute.
-    _setq(f, 'Diameter', diameter)
     if depth == 'through':
         f.DepthType = 'ThroughAll'
     else:
         f.DepthType = 'Dimension'
         _setq(f, 'Depth', depth)
+        f.DrillPoint = point
     _set_start(f, start, offset, reference)
     _set_operation(f, operation)
+    thread = ''
     if thread_type is not None:
         if thread_type not in f.getEnumerationsOfProperty('ThreadType'):
             raise FdmkitError(f'hole: thread type {thread_type} unavailable')
         f.Threaded = True
         f.ThreadType = thread_type
-        if thread_size is not None:
-            if thread_size not in f.getEnumerationsOfProperty('ThreadSize'):
-                raise FdmkitError(f'hole: thread size {thread_size} unavailable')
-            f.ThreadSize = thread_size
+        sizes = f.getEnumerationsOfProperty('ThreadSize')
+        if thread_size is None:     # nominal from the diameter: 4 -> 'M4x0.7'
+            nom = _num(_val(f, diameter))
+            thread_size = next((z for z in sizes if re.fullmatch(rf'M{re.escape(nom)}x[\d.]+', z)), None)
+            if thread_size is None:
+                raise FdmkitError(f'hole: no {thread_type} size for nominal {nom}; '
+                                  f'thread_size= one of {", ".join(sizes[:12])} ...')
+        elif thread_size not in sizes:
+            raise FdmkitError(f'hole: thread size {thread_size!r} unavailable; '
+                              f'e.g. {", ".join(z for z in sizes if z.startswith("M3") or z.startswith("M4"))}')
+        f.ThreadSize = thread_size
         f.ModelThread = bool(model_thread)
         f.CosmeticThread = bool(cosmetic_thread)
-    elif thread_size is not None or model_thread:
-        raise FdmkitError('hole: thread_type required for thread_size or model_thread')
-    return _finish(f, s)
+    else:
+        _setq(f, 'Diameter', diameter)
+    r = _finish(f, s)
+    if thread_type is not None:
+        thread = f', {f.ThreadSize} drill {_num(f.Diameter)}'
+    return r + thread
 
 
 _TYPES = {'angle': 'Angle', 'up_to_face': 'UpToFace', 'up_to_first': 'UpToFirst',
@@ -915,7 +1014,7 @@ def _rotation(sketch, kind, angle, axis, name, side, reverse,
     f, s = _feature(kind, name, sketch)
     f.ReferenceAxis = (s, [axis]) if axis in ('V_Axis', 'H_Axis') else (_origin(_body(), axis), [''])
     _setq(f, 'Angle', angle)
-    f.SideType = _SIDES[side]
+    f.SideType = _pick(_SIDES, side, 'side')
     f.Reversed = reverse
     _set_start(f, start, offset, reference)
     _set_type(f, type, up_to)
@@ -1044,6 +1143,8 @@ def circular(features, rings, radial, tangential, axis='Z', symmetry=1,
     of `symmetry`; start_at_shape = the first circle passes through the original."""
     if axis not in ('X', 'Y', 'Z'):
         raise FdmkitError('circular: axis must be X, Y or Z')
+    if not all(isinstance(n, int) and n >= 1 for n in (rings, symmetry)):
+        raise FdmkitError('circular: rings and symmetry must be integers >= 1')
     f, fs = _pattern('PartDesign::CircularPattern', 'circular', features, name, suppressed)
     f.Axis = (_origin(_body(), axis), [''])
     f.NumberCircles = rings
@@ -1082,11 +1183,18 @@ def point_pattern(features, points, suppressed=(), name=None):
 
 
 def _faces(faces, who):
-    """(feature, [FaceN, ...]) from 'Feature.Face3' names of one feature."""
+    """(Tip feature, [FaceN, ...]) from 'Feature.Face3' names of the Body Tip ('Body.Face3' too).
+    A dress-up on an earlier feature rebases onto it and drops every later feature."""
     refs = [_ref(x) for x in ([faces] if isinstance(faces, str) else faces)]
     if not refs or len({o.Name for o, _ in refs}) != 1 or any(not s[0].startswith('Face') for _, s in refs):
         raise FdmkitError(f"{who}: faces must be 'Feature.FaceN' of one feature")
-    return refs[0][0], [s[0] for _, s in refs]
+    base, b = refs[0][0], _body()
+    if base == b:
+        base = b.Tip
+    if base != b.Tip:
+        raise FdmkitError(f'{who}: faces must be on the Tip {b.Tip.Name if b.Tip else "(none)"}, not {base.Name} '
+                          '(an earlier feature would drop the later ones); name them on the Tip')
+    return base, [s[0] for _, s in refs]
 
 
 def defeature(faces, name=None):
@@ -1108,16 +1216,14 @@ def thickness(faces, value, mode='skin', join='arc', inward=True, name=None):
     """PartDesign Thickness: hollow the solid, removing the faces. mode 'skin' = a wall of value
     inside the faces (inward=False: outside), 'recto_verso' (26.3) = half the value on each
     side; join 'arc' or 'intersection'."""
-    if mode not in _THICK or join not in _JOINS:
-        raise FdmkitError('thickness: mode skin|recto_verso, join arc|intersection')
     if name:
         _free(name)
     base, subs = _faces(faces, 'thickness')
     f = _body().newObject('PartDesign::Thickness', name or 'thickness')
     f.Base = (base, subs)
     _setq(f, 'Value', value)
-    f.Mode = _THICK[mode]
-    f.Join = _JOINS[join]
+    f.Mode = _pick(_THICK, mode, 'mode')
+    f.Join = _pick(_JOINS, join, 'join')
     f.Reversed = inward                 # FreeCAD's Reversed (default True) means inwards
     return _finish(f, None)
 
@@ -1126,13 +1232,14 @@ def move(feature, after):
     """Move a feature or sketch to just after another one in the active body."""
     b = _body()
     f, t = _obj(feature), _obj(after)
+    before = {o.Name for o in b.Group if _bad(o)}
     tip_last = b.Tip == _solid_tail(b)
     b.removeObject(f)
     b.insertObject(f, t, True)
     if tip_last:
         b.Tip = _solid_tail(b)
     _rc(f.Document)
-    bad = [o for o in b.Group if _bad(o)]
+    bad = [o for o in b.Group if _bad(o) and o.Name not in before]
     if bad:
         raise FdmkitError('move: ' + '; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
     return f'{f.Name}: after {t.Name}'
@@ -1151,10 +1258,10 @@ def mirror(features, plane='XY', name=None):
     m.MirrorPlane = (ref, [''])
     last = max(fs, key=b.Group.index)
     if b.Group.index(m) != b.Group.index(last) + 1:
-        tip_last = b.Tip == m
         b.removeObject(m)
         b.insertObject(m, last, True)
-        b.Tip = _solid_tail(b) if tip_last else b.Tip
+    if b.Tip is None or b.Group.index(m) > b.Group.index(b.Tip):
+        b.Tip = m       # else the mirrored half is outside the Body shape (same trap as patterns)
     _rc(m.Document)
     if _bad(m) or not m.Shape.isValid() or len(m.Shape.Solids) != 1:
         raise FdmkitError(f'{m.Name}: {m.getStatusString()} solids {len(m.Shape.Solids)}')
@@ -1162,9 +1269,11 @@ def mirror(features, plane='XY', name=None):
 
 
 # ---------------------------------------------------------------- inspect
-def chk():
-    """Whole active body: sketches at DoF 0, features valid, one valid solid."""
-    b = _body()
+def chk(body=None):
+    """Whole Body (default the active one): sketches at DoF 0, features valid, one valid solid."""
+    b = _obj(body) if body else _body()
+    if b.TypeId != 'PartDesign::Body':
+        raise FdmkitError(f'{b.Name}: not a Body')
     issues = []
     for o in b.Group:
         if o.TypeId == 'Sketcher::SketchObject':
@@ -1203,18 +1312,24 @@ def tree():
 
 
 def undo():
+    """Undo the last committed call. Right after an ERR (rolled back, nothing to undo) it
+    refuses once, naming what a second undo() would revert."""
     d = _doc()
     if not d.UndoCount:
         raise FdmkitError('undo: nothing to undo')
+    last = d.UndoNames[0] if d.UndoNames else '?'
+    if _rolled_back.pop(d.Name, False):
+        raise FdmkitError(f"undo: the last call was rolled back, nothing to undo from it; "
+                          f"undo() again reverts '{last}'")
     d.undo()
     _rc(d)
-    return f'undo: OK, {d.UndoCount} left'
+    return f"undo: reverted '{last}', {d.UndoCount} left"
 
 
 # ---------------------------------------------------------------- model checks
 def _bodies(d):
-    """Part Bodies: not the shape Bodies of CAM tool bits."""
-    bits = {o.BitBody.Name for o in d.Objects if getattr(o, 'BitBody', None) is not None}
+    """Part Bodies with a solid: not the shape Bodies of CAM tool bits."""
+    bits = _bits(d)
     return [o for o in d.Objects if o.TypeId == 'PartDesign::Body' and o.Tip and o.Name not in bits]
 
 
@@ -1424,7 +1539,9 @@ def sel():
                 continue
             shapes.append(sh)
             leaf = sub.split('.')[-1] or sub
-            items.append(f'{s.Object.Name}.{leaf} {_describe(sh)}')
+            own = s.Object.getSubObject(sub, retType=1) if '.' in sub else s.Object
+            # the leaf object (pad, sketch), not the container: 'Body.Face6' would name the Tip's Face6
+            items.append(f'{(own or s.Object).Name}.{leaf} {_describe(sh)}')
     if not items:
         return 'sel: nothing selected'
     if len(shapes) == 2:
@@ -1538,8 +1655,8 @@ def link_array(source, kind, count=None, step=None, axis=None, angle=360, path=N
             f.Axis = _ref(axis, holder)
             _setq(f, 'Angle', angle)
     elif kind == 'path':
-        if path is None or count is None:
-            raise FdmkitError('link_array path: path and count needed')
+        if path is None or not isinstance(count, int) or count < 1:
+            raise FdmkitError('link_array path: path and an integer count >= 1 needed')
         f.Path = _ref(path)
         f.Count = count
         f.RelativeToFirst = True
@@ -1626,54 +1743,63 @@ def snapshot_restore(name, solve=True):
 
 
 # ---------------------------------------------------------------- speed
-_focus = {}   # doc name -> list of Body names whose recompute is enough
+_focus = {}   # doc Uid -> list of Body names whose recompute is enough
 
 
-def _rc(d):
-    """Recompute only the focused Bodies (and the params sheet) when focus() is set,
-    else the whole document. A full recompute also re-solves every Assembly."""
-    names = _focus.get(d.Name)
+def _focus_objs(d):
+    """Objects to recompute and check under focus(): params, the focused Bodies and the active
+    one, and new top-level objects (link arrays); None when focus is off."""
+    names = _focus.get(d.Uid)
     if not names:
-        d.recompute()
-        return
-    objs = []
-    sh = d.getObject(PARAMS)
-    if sh:
-        objs.append(sh)
+        return None
+    try:
+        names = list(dict.fromkeys(names + [_body(d).Name]))
+    except FdmkitError:
+        pass
+    objs = [d.getObject(PARAMS)] if d.getObject(PARAMS) else []
     for n in names:
         b = d.getObject(n)
         if b is None:
             continue
         objs.append(b)
         objs.extend(o for o in getattr(b, 'Group', []) if not o.TypeId.startswith('App::'))
-    d.recompute(objs)
+    objs.extend(o for o in d.Objects if 'Touched' in o.State and o not in objs
+                and o.getParentGeoFeatureGroup() is None and not o.TypeId.startswith('Assembly::'))
+    return objs
+
+
+def _rc(d):
+    """Recompute only the focused Bodies (and the params sheet) when focus() is set,
+    else the whole document. A full recompute also re-solves every Assembly."""
+    objs = _focus_objs(d)
+    if objs is None:
+        d.recompute()
+    else:
+        d.recompute(objs)
 
 
 def _scope(d):
     """Objects whose state matters now: the focused Bodies (+ params), else all."""
-    names = _focus.get(d.Name)
-    if not names:
-        return list(d.Objects)
-    out = [d.getObject(PARAMS)] if d.getObject(PARAMS) else []
-    for n in names:
-        b = d.getObject(n)
-        if b:
-            out.append(b)
-            out.extend(o for o in getattr(b, 'Group', []) if not o.TypeId.startswith('App::'))
-    return out
+    objs = _focus_objs(d)
+    return list(d.Objects) if objs is None else objs
 
 
 def _fix_joint_refs(d):
-    """Assembly joints that lost their element ('?FaceN') after a part change: point them
-    back at Face1 (the joints here use Detach and explicit placements)."""
-    n = 0
+    """Assembly joints that lost their element ('?FaceN') after a part change. A joint with
+    Detach{n} (explicit placement) only needs a valid element: point it at Face1. Any other
+    joint would jump to the part origin, so it is left broken and reported."""
+    fixed, lost = 0, []
     for o in d.Objects:
-        for r in ('Reference1', 'Reference2'):
-            ref = getattr(o, r, None)
-            if ref and ref[0] and ref[1] and str(ref[1][0]).startswith('?'):
-                setattr(o, r, (ref[0], ['Face1']))
-                n += 1
-    return n
+        for n in ('1', '2'):
+            ref = getattr(o, 'Reference' + n, None)
+            if not (ref and ref[0] and ref[1] and any(str(x).startswith('?') or '.?' in str(x) for x in ref[1])):
+                continue
+            if getattr(o, 'Detach' + n, False):
+                setattr(o, 'Reference' + n, (ref[0], ['Face1']))
+                fixed += 1
+            else:
+                lost.append(f'{o.Name}.Reference{n} {ref[1][0]}')
+    return fixed, lost
 
 
 def _show_tips(d):
@@ -1698,16 +1824,16 @@ def focus(*bodies):
     miss = [n for n in bodies if d.getObject(n) is None]
     if miss:
         raise FdmkitError(f'focus: no {miss}')
-    _focus[d.Name] = list(bodies)
+    _focus[d.Uid] = list(bodies)
     return f'focus: {", ".join(bodies) or "off"}'
 
 
 def full():
     """Leave focus, recompute everything and solve every Assembly once."""
     d = _doc()
-    _focus.pop(d.Name, None)
+    _focus.pop(d.Uid, None)
     d.recompute()
-    _fix_joint_refs(d)
+    fixed, lost = _fix_joint_refs(d)
     d.recompute()
     _show_tips(d)
     out = []
@@ -1716,7 +1842,11 @@ def full():
             out.append(f'{a.Name} solve {a.solve()}')
     d.recompute()
     bad = [o.Name for o in d.Objects if _bad(o)]
-    return 'full: ' + ('; '.join(out) or 'no assembly') + (f'; invalid {bad}' if bad else '; OK')
+    if fixed:
+        out.append(f'{fixed} detached joint refs -> Face1')
+    if lost:
+        out.append('lost joint refs ' + ', '.join(lost))
+    return 'full: ' + ('; '.join(out) or 'no assembly') + (f'; invalid {bad}' if bad else '' if lost else '; OK')
 
 
 def _toggle_freeze(names, want):
@@ -1862,11 +1992,19 @@ def _cnc_coaxial(f, p, d):
 def _cnc_lathe_axis(sh):
     """Turning axis: Z or the axis of a round face (pins), whichever turns the largest area."""
     cands = [(V(), _Z)]
-    for f in sh.Faces:
+    F = sh.Faces
+    for f in F:
         s = f.Surface
-        if s.TypeId in ('Part::GeomCylinder', 'Part::GeomCone', 'Part::GeomToroid'):
-            cands.append((s.Apex if s.TypeId == 'Part::GeomCone' else s.Center, s.Axis))
-    return max(cands, key=lambda a: (sum(f.Area for f in sh.Faces if _cnc_coaxial(f, *a)), a[1] is _Z))
+        if s.TypeId not in ('Part::GeomCylinder', 'Part::GeomCone', 'Part::GeomToroid') or _cnc_par(s.Axis, _Z):
+            continue    # an axis parallel to Z is a drilled hole or a boss, not the A axis
+        c = s.Apex if s.TypeId == 'Part::GeomCone' else s.Center
+        u, v = f.Surface.parameter(f.CenterOfMass)
+        q, n = f.valueAt(u, v), f.normalAt(u, v)
+        r = q - c - V(s.Axis) * (q - c).dot(V(s.Axis))
+        if r.Length > 1e-9 and n.dot(r) > 0:       # outer surface (a hole's normal points to its axis)
+            cands.append((c, s.Axis))
+    area = [f.Area for f in F]
+    return max(cands, key=lambda a: (sum(x for f, x in zip(F, area) if _cnc_coaxial(f, *a)), a[1] is _Z))
 
 
 def _cnc_samples(f, n=3, shrink=0.2):
@@ -2027,7 +2165,9 @@ def _cnc_body(b, r):
             ax = getattr(f.Surface, 'Axis', None)
             if f.Surface.TypeId in ('Part::GeomCylinder', 'Part::GeomCone') and _cnc_tool_axis(ax):
                 dirs += [ax, -ax]                           # drill / countersink along the hole axis
-            if not any(n.dot(a) >= -0.01 and _cnc_escapes(mesh, p + n * 0.1, a, sh) for a in dirs):
+            q, ds = p + n * 0.1, [a for a in dirs if n.dot(a) >= -0.01]
+            if not (any(_cnc_hit(mesh, q, a) is None for a in ds)
+                    or any(sh.common(Part.LineSegment(q, q + a * 200).toShape()).Length < 0.005 for a in ds)):
                 out['access'].append(f'F{i + 1} {f.Surface.TypeId[10:]} {_cnc_where(f.CenterOfMass)}')
                 bad.add(i)
                 break
@@ -2044,7 +2184,12 @@ def _cnc_body(b, r):
             if n.dot(m) > -0.999:
                 continue
             gap = n.dot(g.CenterOfMass - f.CenterOfMass)
-            if gap <= 0.02 or gap > 3 or abs(f.distToShape(g)[0] - gap) > 0.01:
+            axes = ([_Z] if abs(n.z) < 1e-3 else []) + ([_Z.cross(n).normalize()] if _Z.cross(n).Length > 1e-6 else [])
+            depth = min((max(v.Point.dot(x) for v in f.Vertexes) - min(v.Point.dot(x) for v in f.Vertexes)
+                         for x in axes), default=0)
+            if gap <= 0.02 or (gap >= max(2 * r, CNC_LATHE_MIN_GROOVE) and depth / gap <= CNC_MAX_MILL_LD):
+                continue        # nothing to report for this pair: skip the costly overlap test
+            if abs(f.distToShape(g)[0] - gap) > 0.01:
                 continue
             # lathe groove = both faces turned with a turned floor between them (a milled window has none)
             if turned[i] and turned[j] and any(
@@ -2055,9 +2200,6 @@ def _cnc_body(b, r):
                     out['groove'].append(f'F{i + 1}/F{j + 1} {gap:.2f}<{CNC_LATHE_MIN_GROOVE:g} {_cnc_where(f.CenterOfMass)}')
                     bad.update((i, j))
                 continue
-            axes = ([_Z] if abs(n.z) < 1e-3 else []) + ([_Z.cross(n).normalize()] if _Z.cross(n).Length > 1e-6 else [])
-            depth = min((max(v.Point.dot(x) for v in f.Vertexes) - min(v.Point.dot(x) for v in f.Vertexes)
-                         for x in axes), default=0)
             if gap < 2 * r - 0.02:
                 out['slot'].append(f'F{i + 1}/F{j + 1} {gap:.2f}<Ø{2 * r:g} {_cnc_where(f.CenterOfMass)}')
                 bad.update((i, j))
@@ -2082,9 +2224,10 @@ def _cnc_f(v):
     """Float of a number, Quantity, '1.5 mm' or a params alias."""
     if isinstance(v, str):
         s = _sheet(False)
-        if s is not None and v in _aliases(s):
-            return float(getattr(s.get(v), 'Value', s.get(v)))
-        return App.Units.Quantity(v).Value
+        try:
+            return _val(s, v) if s is not None else App.Units.Quantity(v).Value
+        except Exception:
+            raise FdmkitError(f'cutter {v!r}: not a length, expression or params alias') from None
     return float(getattr(v, 'Value', v))
 
 
@@ -2093,7 +2236,8 @@ def _cnc_radius(d, cutter):
         return _cnc_f(cutter) / 2
     s = _sheet(False, d)
     if s is not None and 'CncCornerRadius' in _aliases(s):
-        return s.get('CncCornerRadius').Value
+        v = s.get('CncCornerRadius')        # P(CncCornerRadius=0.5) stores a bare number
+        return float(getattr(v, 'Value', v))
     return 0.5
 
 
@@ -2104,7 +2248,10 @@ def cnc(*bodies, skip=(), cutter=None, holes=False):
     (tap drill / ISO 273 clearance). cnc_show() paints the last result red."""
     d = _doc()
     r = _cnc_radius(d, cutter)
+    skip = (skip,) if isinstance(skip, str) else tuple(skip)
     bs = [_obj(n) for n in bodies] if bodies else [b for b in _bodies(d) if b.Name not in skip and b.Label not in skip]
+    if not bs:
+        raise FdmkitError('cnc: no bodies to check')
     res = {b.Name: _cnc_body(b, r) for b in bs}
     App._fdmkit_cnc = res
     parts = []
@@ -2138,7 +2285,7 @@ def cnc_show():
         if b is None or not x['bad'] or not b.ViewObject:
             continue
         vo = _tip_vo(b)
-        old = saved.setdefault(name, list(vo.DiffuseColor))
+        old = saved.setdefault((d.Name, vo.Object.Name), list(vo.DiffuseColor))
         n = len(b.Shape.Faces)
         base = old if len(old) == n else old[:1] * n
         vo.DiffuseColor = [(1.0, 0.15, 0.15, base[i][3]) if i in x['bad'] else base[i] for i in range(n)]
@@ -2151,11 +2298,11 @@ def cnc_restore():
     """Colours back after cnc_show()."""
     d = _doc()
     saved = getattr(App, '_fdmkit_cnc_saved', {})
-    for name, cols in saved.items():
-        if d.getObject(name) is not None:
-            _tip_vo(d.getObject(name)).DiffuseColor = cols
-    App._fdmkit_cnc_saved = {}
-    return f'cnc_restore: {len(saved)} bodies'
+    done = [k for k in saved if k[0] == d.Name and d.getObject(k[1]) is not None]
+    for k in done:
+        d.getObject(k[1]).ViewObject.DiffuseColor = saved.pop(k)
+    App._fdmkit_cnc_saved = saved
+    return f'cnc_restore: {len(done)} objects'
 
 
 def _cam_index(azimuth):
@@ -2285,6 +2432,7 @@ def cam_del(job):
 # ---------------------------------------------------------------- entry
 AUTOSAVE_S = 300
 _saved = {}
+_rolled_back = {}   # doc name -> True after a call that was rolled back (see undo())
 
 
 def _autosave(d):
@@ -2319,26 +2467,32 @@ def _alive(d):
 def run(expr):
     """Run 'a(); b(); c()' as ONE transaction: one result per call, ' ; '-joined.
     Any failure rolls the whole batch back and names the failing step.
-    '?expr' is read-only: no transaction, no recompute, no autosave."""
+    '?expr' is read-only: its document changes are discarded, no recompute, no autosave."""
+    expr = expr.strip()
     if 'exportPageAsPdf' in expr:
         return 'ERR exportPageAsPdf crashes FreeCAD 26.3; use TechDrawGui.exportPageAsSvg'
     try:
-        ast.parse(expr.lstrip()[1:] if expr.lstrip().startswith('?') else expr)
+        ast.parse(expr[1:].strip() if expr.startswith('?') else expr)
     except SyntaxError as e:
         hint = ("; '?' marks the whole expr as read-only and goes only at its very start,"
                 " never inside a batch" if re.search(r'[;\n]\s*\?', expr) else '')
         return f'ERR parse: {e.msg} at col {e.offset}{hint}'
-    if expr.lstrip().startswith('?'):
+    if expr.startswith('?'):
+        d = App.ActiveDocument
+        if d:   # a read must not change the model: whatever it wrote is aborted below
+            d.openTransaction('?read')
         try:
             ns = _ns()
-            body = expr.lstrip()[1:]
-            mod = ast.parse(body)
+            mod = ast.parse(expr[1:].strip())
             last = mod.body.pop() if mod.body and isinstance(mod.body[-1], ast.Expr) else None
             exec(compile(mod, '<fdmkit?>', 'exec'), ns)
             r = eval(compile(ast.Expression(last.value), '<fdmkit?>', 'eval'), ns) if last else None
-            return 'OK' if r is None else str(r)
+            return 'OK' if r is None else _line(str(r))
         except Exception as e:
-            return f'ERR read: {type(e).__name__}: {e}'
+            return _line(f'ERR read: {type(e).__name__}: {e}')
+        finally:
+            if d and _alive(d):
+                d.abortTransaction()
     d = None if re.fullmatch(r'\s*undo\s*\(\s*\)\s*', expr) else App.ActiveDocument
     if d:
         d.openTransaction(expr[:60])
@@ -2353,22 +2507,39 @@ def run(expr):
                 exec(compile(ast.Module([node], []), '<fdmkit>', 'exec'), ns)
         if d and _alive(d):
             d.commitTransaction()
-            _autosave(d)
-        return ' ; '.join(out) or 'OK'
+            _rolled_back.pop(d.Name, None)
+            try:
+                _autosave(d)
+            except Exception as e:     # committed; only the save failed
+                out.append(f'WARN autosave failed: {e}')
+        return _line(' ; '.join(out) or 'OK')
     except Exception as e:
+        same = d is not None and _alive(d) and App.ActiveDocument == d
         if d and _alive(d):
             d.abortTransaction()
             _rc(d)
+            _rolled_back[d.Name] = True
         msg = str(e) if isinstance(e, FdmkitError) else f'{type(e).__name__}: {e}'
-        return f'ERR step {step}: {msg}' + (' (batch rolled back)' if step > 1 else '')
+        if same or d is None:
+            tail = ' (batch rolled back)' if step > 1 else ''
+        else:   # reopen()/new()/closeDocument inside the batch: the rollback reached only the old document
+            tail = ' (the active document changed during the call: earlier steps may NOT be rolled back)'
+        return _line(f'ERR step {step}: {msg}' + tail)
+
+
+def _line(s):
+    """One line: FreeCAD expression errors span several lines."""
+    return ' '.join(x.strip() for x in s.splitlines() if x.strip())
 
 
 def _boot():
     old = getattr(App, '_fdmkit_observer', None)
     if old:
         App.removeDocumentObserver(old)
-    App._fdmkit_observer = _SheetObserver()
-    App.addDocumentObserver(App._fdmkit_observer)
+    App._fdmkit_observer = None
+    if int(App.Version()[0]) < 27:   # 27.1 updates alias dependents (and chains) by itself
+        App._fdmkit_observer = _SheetObserver()
+        App.addDocumentObserver(App._fdmkit_observer)
     v = App.Version()
     ver = f'{v[0]}.{v[1]}.{v[2]} {v[3].split()[0]}'
     p = App.ParamGet(_PREF)
@@ -2574,7 +2745,9 @@ def selftest():
             b5 = _body(d5)
             for z in (min(zf), max(zf)):
                 Gui.Selection.addSelection(d5.Name, b5.Name, f'{pad_.Name}.Face{zf[z]}')
-            ck('sel', "?sel()", lambda r: 'distance 10.5' in r or 'distance 10' in r)
+            ck('sel', "?sel()", lambda r: ('distance 10.5' in r or 'distance 10' in r)
+               and r.startswith(f'{pad_.Name}.Face{zf[min(zf)]} ')   # the feature, not 'Body.FaceN'
+               and abs(_ref(r.split()[0])[0].getSubObject(r.split()[0].split('.')[1]).BoundBox.ZMin - min(zf)) < 1e-6)
             Gui.Selection.clearSelection()
             ck('pdf_guard', "?TechDrawGui.exportPageAsPdf", lambda r: 'crashes' in r)
             fn = os.path.join(tempfile.mkdtemp(prefix='fdmkit_'), 'fdmkit_checks.FCStd')
@@ -2595,8 +2768,11 @@ def selftest():
             ck('cnc_pocket', "plane('cb_top','XY','cb_h'); sk('cb_pk','cb_top'); rect('cb_pk',6,6); "
                "pocket('cb_pk',3)", lambda r: 'pocket: OK' in r)
             ck('cnc_corner', "cnc()", lambda r: r.startswith('cnc: ERR 0/1') and 'corner' in r)
-            ck('cnc_show', "cnc_show(); cnc_restore()", lambda r: 'cnc_restore: 1 bodies' in r)
+            ck('cnc_show', "cnc_show(); cnc_restore()", lambda r: 'cnc_restore: 1 objects' in r)
+            ck('cnc_radius_bare', "P(CncCornerRadius=0.5); cnc()", lambda r: 'cnc: ERR 0/1 bodies, Ø1 ' in r)
+            ck('cnc_skip_str', "cnc(skip='Body')", lambda r: 'no bodies to check' in r)
             ck('cam_job', "cam_job('JobT', 'Body', cutter=2)", lambda r: r.startswith('cam_job: OK JobT'))
+            ck('cam_not_bit', "chk()", lambda r: r.startswith('OK pocket'))   # not the end mill's Body
             ck('cam_slot', "cam_slot('JobT', (-5, 8, 10), (5, 8, 10), 1)", lambda r: r.startswith('cam_slot: OK'))
             ck('cam_bodies', "check()", lambda r: r.startswith('check: OK 1 bodies'))
             ck('cam_del', "cam_del('JobT')", lambda r: r == 'cam_del: JobT'

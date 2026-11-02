@@ -22,7 +22,8 @@ Radial sketch on 'XZ' (normal -Y) turned to azimuth a about Z: AttachmentOffset
 placement(vector(d*sin(a); 0 mm; d*cos(a)); rotation(vector(0; 1; 0); a)), a = 0 on -Y.
 slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r)
 half(sk) cuts a sketch symmetric about its H axis to y>=0, in place
-pad(sk,len,side='one'|'two'|'sym',reverse) | pocket(sk,depth='through',reverse) | revolve(sk,angle=360,axis='V_Axis'|'Z')
+pad(sk,len,side='one'|'two'|'sym',reverse,length2) | pocket(sk,depth='through',reverse,depth2)
+side='two' needs length2/depth2 (a number, expression or 'through') | revolve(sk,angle=360,axis='V_Axis'|'Z')
 26.3 starts: pad/pocket/revolve/groove(...,start='profile'|'offset'|'reference',
 offset=expr,reference='XY'|datum|(sk,(x,y))); pocket/groove/hole(...,operation='subtract'|'common')
 Offset runs along the feature: pad +normal, pocket into the cut (pocket offset=-6 starts 6 above).
@@ -31,8 +32,9 @@ regions under those sketch-coord points, so one master sketch drives several fea
 regions(sk) lists InternalFaceN, area, an inner point, holes. Pick by point, never by N.
 After a sketch edit lint() reports 'lost ?InternalFaceN' (the feature keeps a stale
 shape); remap(feature,(x,y),...) re-picks the regions, remap(feature) = whole sketch.
-hole(sk,diameter,depth='through',thread_type=None,thread_size=None,
-model_thread=False,cosmetic_thread=True) | groove(sk,angle=360,axis='V_Axis'|'Z')
+hole(sk,diameter,depth='through',thread_type=None,thread_size=None,model_thread=False,
+cosmetic_thread=True,drill_point='flat'|'angled') blind floor flat at depth ('angled' adds a cone
+below it); threaded: diameter = nominal (4 -> M4x0.7, tap drill set) | groove(sk,angle=360,axis=)
 revolve/groove(...,project_axis=True (axis outside the sketch plane), type='angle'|'up_to_face'|
 'up_to_first'|'up_to_last'(revolve)|'through'(groove), up_to=plane|'Feature.FaceN')
 midplane(name,a,b) datum midway between two planes/faces (bisector if not parallel)
@@ -44,15 +46,16 @@ circular(features,rings,radial,tangential,axis='Z',symmetry=1) concentric circle
 path_pattern(features,path,count=None,spacing=None,align=False) first instance = original |
 point_pattern(features,sketch) at circle centres, the first centre marks the original.
 Every pattern becomes the Body Tip; a pattern that changes nothing is an ERR.
-defeature(['Feature.Face7',...]) removes faces and heals | thickness(faces,value,
+defeature(['Tip.Face7',...]) removes faces of the Body Tip and heals | thickness(faces,value,
 mode='skin'|'recto_verso',join='arc'|'intersection',inward=True) shell; fails on complex solids
 mirror([features],plane='XY'|datum) PartDesign::Mirrored | move(feature, after)
-dim(sk,'r1_w',val) | chk() | why(name) | tree() | undo() | selftest() | reload()
+dim(sk,'r1_w',val) (angles in deg) | chk(body=None) | why(name) | tree() | selftest()
+undo() reverts the last committed call and names it; right after an ERR it refuses once.
 mass(*objs,density=g/cm³) = V, m, CoG, principal I (materials' density unless 'Default')
 LINKS/ASSEMBLY: link_array(source,'linear'|'polar'|'path'|'point',count,step,axis,angle,path,
 points,into=assembly) = App::Link instances, joints attach to any | rigid_group(*links) joint |
 snapshot(name) store/re-capture placements+visibility | snapshot_restore(name,solve=True)
-SPEED: '?expr' = read-only (no transaction/recompute); '?' only at the very start, never
+SPEED: '?expr' = read-only (its changes are discarded, no recompute); '?' only at the start, never
 mid-batch: write steps and the read go in separate calls. focus('Body',...) = recompute only
 those Bodies + params until full(); full() = one recompute + Assembly solve.
 freeze('Name',...) / thaw(...) = Std_ToggleFreeze heavy objects (Assembly, gears, STEP).
@@ -63,10 +66,11 @@ intersections, every Fasteners object on a hole axis | lint() = traps: lost sket
 to a cylinder, countersink apex on the hole floor, sketches placed by plain numbers,
 cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set,
 check(), restore (stress test) | sel() = GUI selection + distance, angle of axes/normals,
-distance of parallel hole axes, diameters | reopen() = save, close, open, recompute.
+distance of parallel hole axes, diameters; names items 'pad.Face6'/'sk.Edge1', usable as refs |
+reopen() = save, close, open, recompute (clears undo). full() reports lost Assembly joint refs.
 TechDraw: SVG export only (exportPageAsPdf crashes 26.3; untested on 27.1).
 CNC (metal, lathe + 4-axis mill, A = part Z; cutter Ø = 2 x params.CncCornerRadius or cutter=):
-cnc(*bodies, skip=(), cutter=None, holes=False) = sharp inside corners without a floor the
+cnc(*bodies, skip=('Name',...), cutter=None, holes=False) = sharp inside corners without a floor the
 cutter reaches (stick-out <= 6 Ø), fillets < cutter R, unreachable milled faces, slots < Ø or
 deeper than 4 x width, lathe grooves < 0.5, holes L/D > 8, walls < 0.3; holes=True lists tap
 drill / ISO 273 sizes | cnc_show() / cnc_restore() = faces of the last cnc() red / colours back.
@@ -77,9 +81,6 @@ points in PART coordinates on the top surface | cam_sim(job) = CAM_SimulatorGL t
 | cam_del(job) = CAM's own teardown.
 Namespace: fdmkit calls + App + Gui; import other modules inside the call.
 Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l...
-RULE symmetry: parts are often mirrored pairs (Module_A/Module_B) or symmetric about a
-plane (bays about a divider). Model one side, derive the other by mirroring; make
-layouts (windows, holes, ribs) symmetric; every design revision checks symmetry first.
 LOCAL COORDINATES: model each Body about its own functional origin and symmetry planes;
 Assembly Links/joints place it in the assembly. Use geometric relations and construction
 geometry, then minimal named dimensions; no per-vertex dimension grids or mass Block/Fixed.
@@ -87,103 +88,55 @@ For local source Bodies, check(*assembly_link_names) / case(name, value, *assemb
 check the assembled parts; plain check() would compare Bodies overlapping at their origins.
 Migration procedure: skill/rules.md "Local part coordinates and assembly placement"."""
 
-INSTRUCTIONS = """fdmkit design rules (details: skill rules.md, fem.md):
-1. Understand the part in use first: how it mounts, what bears where, real loads,
-   mating-part shapes. Proven functional details (ledges, fits) stay unless told.
-2. Before creating a component, check FreeCAD native features, installed workbenches,
-   standard parts and manufacturer CAD. Prefer a suitable standard solution; verify
-   its dimensions and interfaces, and resize it through supported parameters.
-   Model custom geometry when no suitable option meets the requirements.
-3. Symmetry first. Copy vs mirror is decided by hole/mount coordinates, never bbox.
-   Build one side; derive the other natively (Part::Mirroring / App::Link).
-   Layouts symmetric; every revision re-checks symmetry.
-4. Native PartDesign only; sketches DoF 0; sizes in params. Bosses before holes.
-   After adding material: holes still through, nothing past bed/mount faces.
-   Keep the feature tree small and editable: for parallel loft sections, attach
-   sketches to one origin plane with expression-driven AttachmentOffset values.
-   Add separate datum planes only for distinct geometric references, not merely
-   to give each parallel sketch a different height.
-5. Overhangs <= 40 deg from print vertical; ligaments >= 3 mm; rims >= 6 mm.
-   Fastener edge distance: the countersink/counterbore/nut-pocket outline keeps >= 3 mm
-   to every edge, wall, slot and recess (M4 countersunk/counterdrill Ø9.8: centre >= 7.9 from each edge);
-   size ears and bases from the fastener; check numbers after each change.
-   Walls: multiples of 0.6, never < 1.8 (3 x 0.6 lines; 0.4 nozzle, 0.2 layer).
-   Lighten with tapered recesses / thin zones, not through windows (windows cost time).
-6. Strength/lightening only from FEM (fem.md): real supports (bolt seat + one-sided
-   wall contact), impact by energy, anisotropic layer criterion; show a table and
-   change the model only after the user agrees.
-7. Print time/grams: slice with tools/orca_slice.py (the user's own Orca presets, A1 NordicLab,
-   0.20mm NordicLab 0.6 Ballance, AzureFilm PETG HF); strength parts solid: 100 % zig-zag.
-8. Reply OK / errors / numbers. No exports unless asked (temp FEM files in scratchpad,
-   deleted after). Renders: white, pastel, no text; colour = deflection.
-9. At the start of work in each CAD project, immediately create or update that project's
-   AGENTS.md as a handoff for the next AI: FreeCAD version and build (?App.Version()), purpose, current model and parameters,
-   verified state, decisions, open questions, and how to resume through this MCP.
-   Keep it current after each substantive model change; do not wait until the end.
-10. Move the FreeCAD camera freely as needed while working. After all model operations,
-   return the GUI to an overall view of the final model: leave any temporary edit
-   mode, restore the intended final Body visibility, switch to axonometric view and
-   Fit All via fdmkit.run(expr). Preserve the user's selection unless the agent made
-   a temporary selection; then clear only that selection.
-11. Give each final FreeCAD Body a distinct saturated pastel ShapeColor as soon as it
-    exists, so the model looks finished in the live GUI throughout construction and
-    in the final overall view. Use light colours with clear hue contrast; do not defer
-    the colours to renders or exports.
-12. Pictures of a model or assembly come only from FreeCAD's standard image export of
-    the user's real document (View3D.saveImage of its own 3D view, white background).
-    Never generate a scene yourself: no shape copies, temporary documents, re-placed
-    or re-coloured parts, or compositing. What the image shows is what the model is.
-13. Before deleting any object whose expressions use the params sheet (features, sketches,
-    datum planes, links, whole Bodies), first clear its expressions (setExpression(p, None)
-    for every entry in ExpressionEngine) and recompute; only then delete it. Otherwise the
-    next change of the sheet segfaults FreeCAD 26.3 (RC1 and RC2) in Document::recompute /
-    enforceRecompute, even after an intermediate recompute (minimal repro confirmed without
-    addons). Rebuild a part in a new Body, relink, clear the old Body's expressions, delete it.
-14. Use FreeCAD's standard tools and workbenches for their jobs instead of custom scripts
-    (full table: rules.md "Standard workbenches for each job"): Sketcher + PartDesign for
-    printable parts, Part for reference/purchased shapes and checks, Spreadsheet for params,
-    Assembly for assemblies, joints, motion limits, Simulation, BOM and exploded views,
-    Fasteners, freecad.gears, UNI-Rolling-Bearing, SheetMetal for hardware and sheet parts,
-    Measure, Material, Fem/Plot, Mesh/MeshPart, Import, TechDraw, Draft, Surface, Inspection,
-    Points/ReverseEngineering for their own tasks; CAM for metal CNC setups and the cutter
-    simulation (cam_job/cam_slot/cam_sim); BIM/Robot are not used. Install a
-    workbench via AddonManager only after the user agrees. No Placement expressions to
-    place or animate parts when an Assembly joint can do it.
-15. Speed (rules.md "Speed with big documents"): focus() the Bodies being edited, freeze()
-    the Assembly and heavy parts, read with '?expr' (never raise Exception to read),
-    batch a whole edit per call, Suppressed instead of delete, one full() at the end.
-    Never send a call while FreeCAD is still busy with the previous one.
-16. Animations/exploded videos (rules.md "Animations and exploded views"): i10g steps of
-    link placements, stages along the real assembly order, loop 0..n..0 for social media.
-    freeze_all() first (else the Assembly solver and i10g's forced recompute undo the
-    explode and take minutes), fixed perspective camera fitted on the exploded state,
-    NaviCube off, i10g_video() async, wait for ffmpeg, check frames, then thaw_all(),
-    full() and restore the view. i10g on FreeCAD 26 needs the ShapeAppearance patch
-    (tools/patches/i10g-shapeappearance.patch); re-apply after addon updates.
-17. After every model change: reopen(), check(), lint(). Before handing a parametric model
-    over, run case() on its main drivers. Reference every feature to a real datum (a part
-    face, flange, top or bottom of the part, a pattern row) through params, never to an
-    absolute Z: when the parent grows, absolute features stay behind. Radial hole sketches
-    sit 1 mm outside the cylinder (tangent planes make OCC drop holes at random).
-18. Reverse engineering from the user's caliper measurements (rules.md "Measured
-    reverse engineering"): ignore 0.1-0.2 mm deviations, prefer assembled stack checks
-    between two selected faces (sel()), change the model where several checks agree.
-19. Metal CNC parts (rules.md "Metal CNC parts"): turning first, every turned part one
-    Revolution of a closed R-Z profile; inside corners along the cutter axis get the cutter
-    radius (params.CncCornerRadius), floor-wall corners stay sharp; ISO tap drills and ISO 273
-    clearances, standard screws. After a change run cnc() with check()/lint(); show a doubtful
-    spot with cam_job + cam_slot + cam_sim on the real model, not with a drawn tool.
-20. Local part coordinates (rules.md "Local part coordinates and assembly placement"):
-    choose a functional origin (axis + mid-plane, shoulder or mounting face), align local
-    symmetry planes, keep source Bodies at identity and place their Links with native
-    Assembly joints. Use H/V, coincidence, symmetry, equality, tangency and construction
-    geometry before minimal independent dimensions; do not fix geometry to reach DoF 0.
-    For a migration, work on a copy and retain an untouched baseline. Rebase sketch
-    geometry, origin-relative dimensions, supports and joint connectors consistently;
-    preserve feature history and repair edge/face references geometrically. Compare the
-    assembled solids in both Boolean directions, test main parameters and moving joints,
-    then reopen, check(*assembly_link_names), lint(), and cnc() for metal. Rebase CAM/text
-    consumers too; keep drawings frozen unless their refresh was requested."""
+INSTRUCTIONS = """fdmkit rules (full text: skill/rules.md, fem.md; read the named section first).
+1. Understand the part in use: mounting, load paths, real loads, mating parts. Proven
+   functional details (ledges, fits) stay unless told.
+2. Standard first: native features, installed workbenches (rules.md "Standard workbenches
+   for each job"), standard parts, manufacturer CAD; verify sizes, resize via parameters.
+   AddonManager only after the user agrees. Assembly joints, not Placement expressions.
+3. Symmetry: copy vs mirror by hole/mount coordinates, never bbox; build one side, derive
+   the other natively (Mirrored / App::Link); symmetric layouts; re-check every revision.
+4. Native PartDesign, sketches DoF 0, sizes in params. Reference features to real datums
+   through params, never an absolute Z. Bosses before holes; after adding material holes
+   stay through, nothing passes bed/mount faces. Small tree: loft sections on one origin
+   plane with expression AttachmentOffset; datum planes only for real references.
+   Local Body origins + Assembly placement: rules.md "Local part coordinates".
+5. Print: overhang <= 40 deg from vertical; ligaments >= 3; rims >= 6; countersink/
+   counterbore/nut outline >= 3 from every edge, wall, slot (M4 Ø9.8: centre >= 7.9);
+   walls k x 0.6, never < 1.8; lighten with tapered recesses, not windows. Radial hole
+   sketches 1 mm outside the cylinder (tangent sketches make OCC drop holes).
+6. Strength/lightening only from FEM (fem.md): real supports, impact by energy,
+   anisotropic layers; show a table, change the model only after the user agrees.
+7. Time/grams: tools/orca_slice.py with the user's presets (A1 NordicLab, 0.20mm NordicLab
+   0.6 Ballance, AzureFilm PETG HF); strength parts 100 % zig-zag.
+8. Reply OK / errors / numbers. No exports unless asked; temp files in scratchpad.
+9. At the start of work in a CAD project create/update its AGENTS.md handoff: FreeCAD
+   version + build (?App.Version()), purpose, model, params, verified state, decisions,
+   open questions, how to resume. Update it after each substantive change.
+10. After every model change: reopen(), check(), lint(); before handover case() on the
+   main drivers. reopen() clears the undo history.
+11. Before deleting an object whose expressions use the params sheet, clear them
+   (setExpression(p, None) for each ExpressionEngine entry) and recompute: else the next
+   sheet change segfaults FreeCAD 26.3 (untested on 27.1).
+12. Speed (rules.md "Speed with big documents"): focus() the edited Bodies, freeze() the
+   Assembly and heavy parts, '?expr' reads, one batch per edit, Suppressed not delete,
+   one full() at the end. Never call while FreeCAD is still busy.
+13. GUI: move the camera freely; at the end leave edit mode, restore final visibility,
+   axonometric + Fit All; keep the user's selection. Every final Body gets a distinct
+   saturated pastel ShapeColor as soon as it exists.
+14. Pictures only via View3D.saveImage of the user's real document, white background;
+   renders pastel, no text, colour = deflection. No staged scenes or copies.
+15. Animations: rules.md "Animations and exploded views" (freeze_all first, i10g
+   ShapeAppearance patch, thaw_all + full() after).
+16. Caliper reverse engineering: ignore 0.1-0.2 deviations, prefer stack checks between
+   two sel() faces, change where several checks agree.
+17. Metal CNC (rules.md "Metal CNC parts"): turning first, one Revolution of a closed R-Z
+   profile; inside corners along the cutter axis = params.CncCornerRadius, floor-wall
+   corners sharp; ISO tap drills, ISO 273 clearances; cnc() after each change; show doubts
+   with cam_job + cam_slot + cam_sim on the real model.
+18. Migration to local coordinates: on a copy with an untouched baseline; compare the
+   assembled solids both ways, test drivers and joints, then reopen(),
+   check(*assembly_link_names), lint(), cnc() for metal."""
 
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
@@ -195,17 +148,20 @@ def handle(msg):
     if mid is None:
         return None  # notification
     if method == 'initialize':
-        result = {'protocolVersion': msg.get('params', {}).get('protocolVersion', '2025-06-18'),
+        result = {'protocolVersion': (msg.get('params') or {}).get('protocolVersion', '2025-06-18'),
                   'capabilities': {'tools': {}},
-                  'serverInfo': {'name': 'fdmkit', 'version': '0.3.0'},
+                  'serverInfo': {'name': 'fdmkit', 'version': '0.4.0'},
                   'instructions': INSTRUCTIONS}
     elif method == 'tools/list':
         result = {'tools': [TOOL]}
     elif method == 'tools/call':
-        p = msg.get('params', {})
+        p = msg.get('params') or {}
         if p.get('name') != 'run':
             return {'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32602, 'message': 'unknown tool'}}
-        out = fc.call(p.get('arguments', {}).get('expr', ''))
+        try:
+            out = fc.call((p.get('arguments') or {}).get('expr', ''))
+        except Exception as e:      # HTTP errors, XML faults, bad bytes: still answer this id
+            out = f'RPC ERR {type(e).__name__}: {e}'
         result = {'content': [{'type': 'text', 'text': out}],
                   'isError': out.startswith(('ERR', 'RPC ERR'))}
     elif method == 'ping':
@@ -219,10 +175,13 @@ def main():
     for line in sys.stdin:
         if not line.strip():
             continue
+        mid = None
         try:
-            reply = handle(json.loads(line))
+            msg = json.loads(line)
+            mid = msg.get('id') if isinstance(msg, dict) else None
+            reply = handle(msg)
         except Exception as e:
-            reply = {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32603, 'message': str(e)}}
+            reply = {'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32603, 'message': str(e)}}
         if reply is not None:
             sys.stdout.write(json.dumps(reply) + '\n')
             sys.stdout.flush()
