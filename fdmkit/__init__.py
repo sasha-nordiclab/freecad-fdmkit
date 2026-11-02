@@ -2080,9 +2080,9 @@ def _report_scan():
         else:
             entries[-1].append(ln)
     new = []
-    for e in entries:
-        cut = next((i for i, x in enumerate(e) if x.strip() == '--- code ---'), None)
-        e = e[:cut] if cut else e      # the RPC server echoes the failing code after its error
+    for entry in entries:
+        cut = next((i for i, x in enumerate(entry) if x.strip() == '--- code ---'), None)
+        e = entry[:cut] if cut else entry      # the RPC server echoes the failing code after its error
         if not _ERR_ENTRY.search(' '.join(e)):
             continue
         last = next((x.strip() for x in reversed(e) if x.strip()), '')
