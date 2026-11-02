@@ -2,7 +2,7 @@
 
 These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` and `skill/rules.md`.
 
-- Target: FreeCAD 27.1 weekly (2026-10-28 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
+- Target: FreeCAD 27.1 weekly (2026-10-27 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
 - Layout:
   - `fdmkit/__init__.py` is the whole kit.
   - `Init.py` is the autoload entry.
@@ -14,12 +14,12 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
   - Only native PartDesign: no Part::Feature blobs.
   - Each call is one transaction and returns one line.
   - Sketch helpers leave the sketch at DoF 0.
-- `run()` namespace (`_ns()`): the `__all__` calls plus `App` and `Gui` for both `?expr` reads and transactions. Before 2026-10-20 `?expr` had no `Gui` and transactions had no `App` (NameError).
+- `run()` namespace (`_ns()`): the `__all__` calls plus `App` and `Gui` for both `?expr` reads and transactions. Before 2026-10-20 `?expr` had no `Gui` and transactions had no `App` (NameError). `?expr` runs inside a transaction that is always aborted, so a read cannot change the model (since 2026-11-02).
 - Hidden documents (selftest) still have a Gui document, so selection-based helpers (`freeze_all`, `thaw_all`) are testable there.
 - FreeCAD 26 view providers of links expose `ShapeAppearance` (a material list), not `ShapeMaterial`; addons written for 0.19/0.21 break on it. Our fix for i10g is `tools/patches/i10g-shapeappearance.patch`; `i10g_video()` refuses to run without it.
 - Locale is en_DK, so Spreadsheet values are written as formulas (`'=40.5'`).
 - FreeCAD rejects unit tokens (`h m s g l t mm deg in ...`) as alias names.
-- Spreadsheet alias changes in the tested weekly needed `_SheetObserver` to touch dependents. Keep the workaround unless an isolated RC1 regression test proves it unnecessary.
+- Spreadsheet alias changes in 26.3 needed `_SheetObserver` to touch dependents. 27.1 (20261027) updates direct dependents, alias chains and new aliases by itself (probed 2026-11-02 with the observer removed), and the observer made every P() re-execute every sheet-dependent object (985 ms instead of 2 ms in a 118-object document), so `_boot()` installs it only before 27.
 - 26.3 properties used by the kit include StartType/StartOffset/StartReference, Common on subtractive features, Hole cosmetic threads and PolarPattern SuppressedIndices. Probe property availability and enumeration values before adding more features.
 - `run()` must survive a call that closes the active document (`reopen()`): `_alive(d)` guards the commit and abort, which used to fail with "Cannot access attribute 'abortTransaction' of deleted object". `run()` refuses any expression containing `exportPageAsPdf`, which crashed FreeCAD 26.3.
 - Model checks (`check`, `lint`, `case`, `sel`, `reopen`) came from the ORWO 828 revision (2026-10-24). There a PartDesign Hole whose sketch was tangent to the cylinder dropped one of two holes between recomputes, and features left at an absolute Z drifted when the parent part grew. Fasteners objects are recognised by a proxy module starting with `Fasteners`. The selftest covers each check; tangent detection was verified on the ORWO model (six tangent sketches found with the standoff set to 0).
@@ -58,3 +58,12 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
   - Revolution `StartOffset` is `App::PropertyAngle`.
   - Sketcher Text: GUI command `Sketcher_CreateText` and `SketchObject.setTextAndFont(constraint, text, font_path, isHeight, isConstruction)` exist, but `Sketcher.Constraint('Text', ...)` rejects every argument form, so there is no Python path; not wrapped. `ShowDevelopmentPreviewFeatures` is off (Group constraint hidden).
   - `EnableAsyncRecompute` is True; it applies to GUI commands (Std_Refresh), `Document.recompute()` from Python stays synchronous.
+
+- Deep review (2026-11-02): 10 reviewer agents probed the kit in hidden documents; 108 findings, the high and medium ones fixed and re-probed, selftest 107/107. Facts worth keeping:
+  - `_body()` must skip CAM tool-bit Bodies (`cam_job` adds one as the last Body) and look for `pdbody` in every 3D view: the CAM simulator, sheet or TechDraw tab in front has no active Body, and hidden documents have no ActiveView at all.
+  - A Transformed feature created with empty Originals does not move the Tip: `mirror()` must set `body.Tip` like `_pattern()`. A DressUp (Defeaturing, Thickness) whose Base is an earlier feature rebases onto it and silently drops every later feature, so the kit accepts only Tip faces.
+  - `Gui.Selection.getSelectionEx('', 0)` gives the container (Body) with subname `pad.;#14:1;...F.Face6`; `getSubObject(sub, retType=1)` gives the leaf feature. 'Body.Face6' names the Tip's Face6, a different face.
+  - `SketchObject.solve()` marks an up-to-date sketch Touched (recompute debt and an undo step); DoF and the conflict lists are stored in the file, so checks solve only Touched sketches.
+  - Pad/Pocket `side='two'` uses a hidden `Length2` default (pad 10, pocket 5). Hole: setting `ThreadType` picks `ThreadSize` from the current diameter as the nominal size and replaces `Diameter` by the tap drill; `DrillPoint='Angled'` adds the cone below `Depth`.
+  - Claude Code cuts MCP server instructions at 4096 characters (the tool description arrives whole); keep `INSTRUCTIONS` below that.
+  - `full()` used to repoint every lost joint reference to Face1; a joint without Detach then jumps to the part origin. Only detached joints are repointed now; the others are reported.

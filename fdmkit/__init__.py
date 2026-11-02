@@ -389,9 +389,13 @@ def _sk_done(s, label):
 
 def rect(sketch, w, h, x=0, y=0, at='c', name=None):
     """Rectangle w x h; (x, y) is its centre (at='c') or bottom-left corner (at='bl')."""
+    if at not in ('c', 'bl'):
+        raise FdmkitError(f"rect: at={at!r}: expected 'c' or 'bl'")
     s = _sk(sketch)
     n = _auto(s, 'r', name)
     W, H, X, Y = (_val(s, v) for v in (w, h, x, y))
+    if W <= 0 or H <= 0:
+        raise FdmkitError(f'rect: size {W:g} x {H:g} must be > 0')
     x0, y0 = (X - W / 2, Y - H / 2) if at == 'c' else (X, Y)
     p = [V(x0, y0, 0), V(x0 + W, y0, 0), V(x0 + W, y0 + H, 0), V(x0, y0 + H, 0)]
     g = [s.addGeometry(Part.LineSegment(p[i], p[(i + 1) % 4])) for i in range(4)]
@@ -411,6 +415,8 @@ def rect(sketch, w, h, x=0, y=0, at='c', name=None):
 
 def circ(sketch, d, x=0, y=0, name=None):
     s = _sk(sketch)
+    if _val(s, d) <= 0:
+        raise FdmkitError(f'circ: diameter {d} must be > 0')
     n = _auto(s, 'c', name)
     g = s.addGeometry(Part.Circle(V(_val(s, x), _val(s, y), 0), V(0, 0, 1), _val(s, d) / 2))
     _dim(s, C('Diameter', g, _val(s, d)), n + '_d', d)
@@ -453,6 +459,8 @@ def poly(sketch, pts, name=None):
     n = _auto(s, 'p', name)
     vs = [V(_val(s, a), _val(s, b), 0) for a, b in pts]
     k = len(vs)
+    if k < 3 or any((vs[i] - vs[(i + 1) % k]).Length < 1e-6 for i in range(k)):
+        raise FdmkitError(f'poly: needs >= 3 distinct consecutive points, got {k}')
     g = [s.addGeometry(Part.LineSegment(vs[i], vs[(i + 1) % k])) for i in range(k)]
     s.addConstraint([C('Coincident', g[i], 2, g[(i + 1) % k], 1) for i in range(k)])
     for i, (a, b) in enumerate(pts):
@@ -531,7 +539,7 @@ def _side(g):
     ys = [e[p].y for p in (1, 2) if p in e] or [e[1].y]
     if min(ys) < -_EPS and max(ys) > _EPS:
         return 0
-    return -1 if max(ys) < -_EPS else 1
+    return -1 if min(ys) < -_EPS else 1      # touching the axis from below counts as below
 
 
 def _axis_cut(g):
@@ -572,6 +580,23 @@ def half(sketch):
     cross = [i for i, k in side.items() if k == 0]
     if not low:
         raise FdmkitError(f'{s.Name}: nothing below the H axis')
+    if any(not hasattr(geo[i], 'StartPoint') for i in cross):
+        raise FdmkitError(f'{s.Name}: a full circle crosses the H axis; draw it as two arcs')
+    # points where a kept edge meets a deleted one on the axis (diamond and hexagon tips)
+    tips = []
+    for i in low:
+        for p, q in _ends(geo[i]).items():
+            if p != 3 and abs(q.y) < _EPS:
+                for j, g in enumerate(geo):
+                    if side[j] > 0:
+                        tips += [(q.x, j, pj) for pj, qj in _ends(g).items() if pj != 3 and (qj - q).Length < _EPS]
+    # outline of each geometry: connected by coincidences (a width must belong to the same outline)
+    link = {i: {i} for i in range(len(geo))}
+    for c in s.Constraints:
+        if c.Type == 'Coincident' and c.First >= 0 and c.Second >= 0:
+            u = link[c.First] | link[c.Second]
+            for i in u:
+                link[i] = u
     exprs = {p[len('.Constraints.'):]: e for p, e in s.ExpressionEngine if p.startswith('.Constraints.')}
     # mirror image (above the axis) of every geometry below it, by key points
     mirror = {}
@@ -620,6 +645,8 @@ def half(sketch):
         gi = new[i]
         s.addConstraint(C('PointOnObject', gi, pos, -1))
         pts_on.append((cut.x, gi, pos))
+    for x, j, pj in dict.fromkeys(tips):
+        pts_on.append((x, j - sum(1 for k in low if k < j), pj))
     pts_on.sort()
     if len(pts_on) % 2:
         raise FdmkitError(f'{s.Name}: odd number of axis cuts')
@@ -645,7 +672,8 @@ def half(sketch):
     for c, refs, e in lost:
         if not s.DoF:
             break
-        if c.Type not in ('Radius', 'Diameter', 'DistanceX', 'DistanceY', 'Distance', 'Equal'):
+        if c.Type not in ('Radius', 'Diameter', 'DistanceX', 'DistanceY', 'Distance', 'Equal',
+                          'Horizontal', 'Vertical'):
             continue
         args = []
         if c.Type == 'Equal' and c.First in mirror and c.Second in mirror:
@@ -668,7 +696,11 @@ def half(sketch):
         else:
             sign = -1 if c.Type == 'DistanceY' else 1
             flat = [x for a in args for x in a]
-            if c.Type in ('Radius', 'Diameter'):
+            if c.Type in ('Horizontal', 'Vertical'):
+                if len(args) != 1:
+                    continue
+                cons = C(c.Type, flat[0])
+            elif c.Type in ('Radius', 'Diameter'):
                 cons = C(c.Type, flat[0], c.Value)
             elif c.Type == 'Equal':
                 cons = C('Equal', flat[0], flat[2])
@@ -685,6 +717,16 @@ def half(sketch):
                 s.renameConstraint(k, c.Name)
                 if e:
                     s.setExpression('Constraints.' + c.Name, e if sign > 0 else f'-({e})')
+    for i in cross:     # an arc centred on the axis keeps its centre there (its mirror held it)
+        g = geo[i]
+        if not s.DoF or not hasattr(g, 'Center') or abs(g.Center.y) > _EPS:
+            continue
+        dof = s.DoF
+        k = s.addConstraint(C('PointOnObject', new[i], 3, -1))
+        s.solve()
+        if s.DoF >= dof or _sk_clash(s):
+            s.delConstraint(k)
+            s.solve()
     for old, kind, p1, p2, value, cname, e in crossing_dims:
         if not s.DoF:
             break
@@ -699,6 +741,7 @@ def half(sketch):
             s.renameConstraint(k, cname)
             if e:
                 s.setExpression('Constraints.' + cname, f'({e}) / 2')
+    plain = []
     for (xa, ga, pa), (xb, gb, pb) in pairs:
         if not s.DoF:
             break
@@ -716,17 +759,29 @@ def half(sketch):
             else:
                 cname = f'half_{len(s.Constraints)}_center'
                 s.renameConstraint(k, cname)
-                widths = [c for c in s.Constraints if c.Type == 'DistanceX' and c.Name
-                          and abs(abs(c.Value) - (xb - xa)) < _EPS]
+                outline = link.get(_orig(gb, low), set())
+                widths = [c for c in s.Constraints if c.Type == 'DistanceX' and c.Name and c.Value > 0
+                          and abs(c.Value - (xb - xa)) < _EPS and _orig(c.First, low) in outline]
                 if widths:
                     s.setExpression('Constraints.' + cname,
                                     f'Constraints.{widths[0].Name} / 2')
+                else:
+                    plain.append(cname)
                 break
     r = _sk_done(s, 'half')
     area1 = face()
     if abs(2 * area1 - area0) > 1e-3 * area0:
         raise FdmkitError(f'{s.Name}: half area {area1:.2f} != {area0:.2f} / 2')
-    return r + f', area {area0:.1f} -> {area1:.1f}'
+    warn = f'; WARN {", ".join(plain)} plain numbers (no width of that outline): drive them' if plain else ''
+    return r + f', area {area0:.1f} -> {area1:.1f}' + warn
+
+
+def _orig(gi, low):
+    """Index before the lower geometries were deleted, of index gi after it."""
+    for j in sorted(low):
+        if j <= gi:
+            gi += 1
+    return gi
 
 
 # ---------------------------------------------------------------- sketch regions
@@ -1062,13 +1117,22 @@ def _pattern(kind, who, features, name, suppressed):
     f = b.newObject(kind, name or who)
     b.Tip = f       # newObject leaves Tip on the original: later features would skip the pattern
     f.Originals = fs
+    _suppressed.pop(f.Name, None)       # a rolled-back call may have left one for this name
     if suppressed:
         _need(f, 'SuppressedIndices')
-        f.SuppressedIndices = sorted(set(suppressed))
+        _suppressed[f.Name] = sorted(set(suppressed))
     return f, fs
 
 
+_suppressed = {}    # pattern name -> indices, set once the counts are known
+
+
 def _pattern_done(f, fs):
+    idx = _suppressed.pop(f.Name, None)
+    if idx:     # set last: FreeCAD drops indices beyond the current count
+        f.SuppressedIndices = idx
+        if list(f.SuppressedIndices) != idx:
+            raise FdmkitError(f'{f.Name}: suppressed {idx} outside the instances')
     _rc(f.Document)
     prev = f.BaseFeature                # a pattern gets its BaseFeature on recompute
     if _bad(f) or f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
@@ -1130,9 +1194,9 @@ def linear(features, direction, count, step=None, extent=None, direction2=None, 
         elif ex is not None:
             setattr(f, 'Mode' + sfx, 'Extent')
             _setq(f, 'Length' + sfx, ex)
-    if idx:     # after the counts: FreeCAD drops indices beyond the current Occurrences
+    if idx:
         _need(f, 'SuppressedIndices')
-        f.SuppressedIndices = sorted(set(idx))
+        _suppressed[f.Name] = sorted(set(idx))
     return _pattern_done(f, fs)
 
 
@@ -1367,8 +1431,10 @@ def check(*bodies):
     issues = []
     for b in bs:
         s = b.Shape
-        if s.isNull() or not s.isValid() or len(s.Solids) != 1:
-            issues.append(f'{b.Name}: {len(s.Solids)} solids' + ('' if s.isNull() or s.isValid() else ', invalid'))
+        if s.isNull():
+            issues.append(f'{b.Name}: no shape')
+        elif not s.isValid() or len(s.Solids) != 1:
+            issues.append(f'{b.Name}: {len(s.Solids)} solids' + ('' if s.isValid() else ', invalid'))
     for o in d.Objects:
         if o.TypeId.startswith('TechDraw'):
             continue
@@ -1378,8 +1444,9 @@ def check(*bodies):
                 issues.append(f'{o.Name}: {e}')
         elif _bad(o):
             issues.append(f'{o.Name}: {o.getStatusString()}')
-    for i, a in enumerate(bs):
-        for b in bs[i + 1:]:
+    ok = [b for b in bs if not b.Shape.isNull() and b.Shape.isValid()]
+    for i, a in enumerate(ok):
+        for b in ok[i + 1:]:
             if a.Shape.BoundBox.intersect(b.Shape.BoundBox):
                 v = a.Shape.common(b.Shape).Volume
                 if v > 1e-5:
@@ -1396,7 +1463,10 @@ def _tangent_hole(h):
     base = h.BaseFeature.Shape if h.BaseFeature else None
     if prof is None or base is None or base.isNull():
         return None
+    body = h.getParentGeoFeatureGroup()
     pl = prof.getGlobalPlacement()
+    if body is not None:            # BaseFeature.Shape is in the Body's own frame
+        pl = body.getGlobalPlacement().inverse().multiply(pl)
     n = pl.Rotation.multVec(V(0, 0, 1))
     for g in prof.Geometry:
         if getattr(g, 'TypeId', '') != 'Part::GeomCircle':
@@ -1408,6 +1478,31 @@ def _tangent_hole(h):
                     and abs(_line_dist(c, s.Center, s.Axis) - s.Radius) < 1e-6:
                 return s.Radius
     return None
+
+
+_LINK_SUBS = ('App::PropertyLinkSub', 'App::PropertyLinkSubList',
+              'App::PropertyLinkSubChild', 'App::PropertyLinkSubGlobal')
+
+
+def _lost_refs(o):
+    """[(property, ['?Face3', ...])] of element references that no longer resolve."""
+    out = []
+    for prop in o.PropertiesList:
+        try:
+            if o.getTypeIdOfProperty(prop) not in _LINK_SUBS:
+                continue
+            v = getattr(o, prop)
+        except Exception:
+            continue
+        pairs = [v] if isinstance(v, tuple) and len(v) == 2 and not isinstance(v[0], tuple) else (v or [])
+        subs = []
+        for pair in pairs:
+            if pair and len(pair) == 2:
+                subs += [pair[1]] if isinstance(pair[1], str) else list(pair[1] or [])
+        lost = [x for x in subs if x.startswith('?') or '.?' in x]
+        if lost:
+            out.append((prop, lost))
+    return out
 
 
 def lint():
@@ -1427,13 +1522,10 @@ def lint():
             if abs(apex - h.Depth.Value) < 1e-6:
                 out.append(f'{h.Name}: countersink apex on the hole floor')
     for o in d.Objects:
-        for prop in ('Profile', 'StartReference', 'UpToFace', 'ReferenceAxis'):
-            v = getattr(o, prop, None) if prop in o.PropertiesList else None
-            lost = [x for x in (v[1] if v else ()) if '?' in x]
-            if lost:
-                # 26.3 keeps the old shape of a feature whose sketch region vanished
-                fix = f'remap("{o.Name}", (x, y))' if prop == 'Profile' else 'set it again'
-                out.append(f'{o.Name}.{prop}: lost {",".join(lost)}, {fix}')
+        for prop, lost in _lost_refs(o):
+            # 26.3 keeps the old shape of a feature whose sketch region or face vanished
+            fix = f'remap("{o.Name}", (x, y))' if prop == 'Profile' else 'set it again'
+            out.append(f'{o.Name}.{prop}: lost {",".join(lost)}, {fix}')
     for o in d.Objects:
         if o.TypeId == 'Sketcher::SketchObject' and getattr(o, 'MapMode', '') == 'Deactivated' \
                 and 'Placement' not in dict(o.ExpressionEngine) and o.Placement.Base.Length > 1e-9:
@@ -1469,6 +1561,10 @@ def case(name, value, *bodies):
     if cell is None:
         raise FdmkitError(f'case: {name} not found')
     old = sh.getContents(cell)
+    if isinstance(value, (int, float)):     # a bare number keeps the old cell's unit ('14' on '10 mm')
+        unit = getattr(sh.get(alias), 'Unit', None)
+        if unit is not None and str(unit) != 'Unit: ()' and getattr(sh.get(alias), 'UserString', ''):
+            value = f'{value} {sh.get(alias).UserString.split()[-1]}'
     pages = [p for p in d.Objects if p.TypeId == 'TechDraw::DrawPage' and p.KeepUpdated]
     for p in pages:
         p.KeepUpdated = False
@@ -2559,6 +2655,11 @@ def _tipvol(d):
 def selftest():
     """Build a throwaway part through run(); one line with the failures."""
     prev = App.ActiveDocument.Name if App.ActiveDocument else None
+    picked = []
+    if App.GuiUp:
+        import FreeCADGui as Gui
+        picked = [(s.DocumentName, s.ObjectName, list(s.SubElementNames) or [''])
+                  for s in Gui.Selection.getSelectionEx('', 0)]
     d = App.newDocument('fdmkit_selftest', 'fdmkit_selftest', True, True)
     App.setActiveDocument(d.Name)
     _init(d)
@@ -2706,6 +2807,15 @@ def selftest():
                "rect('half_sk','half_width','half_height'); half('half_sk')",
                lambda r: 'half_sk.half: DoF 0' in r)
             ck('half_pad', "pad('half_sk',6)", lambda r: 'pad: OK' in r)
+            ck('half_slot', "P(sl=30, sw=10); sk('hs','XY'); slot('hs','sl','sw',5,0); half('hs'); P(sl=40, sw=16)",
+               lambda r: 'WARN' not in r and abs(Part.makeFace(d4.getObject('hs').Shape, 'Part::FaceMakerBullseye').Area
+                                                 - (24 * 16 + math.pi * 64) / 2) < 1e-6
+               and d4.getObject('hs').Shape.BoundBox.YMin > -1e-6)
+            ck('half_ears', "P(e1=10, e2=10); sk('he','XY'); rect('he','e1',20,-15,0); rect('he','e2',20,15,0); "
+               "half('he'); P(e2=14)", lambda r: abs(d4.getObject('he').Shape.BoundBox.XMax - 22) < 1e-6)
+            ck('half_diamond', "sk('hd','XY'); poly('hd',[(-10,0),(0,-6),(10,0),(0,6)]); half('hd')",
+               lambda r: 'area 120.0 -> 60.0' in r)
+            ck('sketch_bad_args', "rect('hd',5,5,at='tr')", lambda r: "expected 'c' or 'bl'" in r)
             ck('mirror', "mirror('pad','XZ')", lambda r: 'Mirrored: OK' in r)
             ck('half_drive', "P(half_width=24,half_height=12)",
                lambda r: r.startswith('P:') and d4.getObject('half_sk').DoF == 0
@@ -2718,7 +2828,7 @@ def selftest():
             App.closeDocument(d4.Name)
             App.setActiveDocument(d.Name)
         d5 = App.newDocument('fdmkit_checks', 'fdmkit_checks', True, True)
-        live = d5.Name
+        live, tmp = d5.Name, None
         try:
             import os
             import tempfile
@@ -2750,7 +2860,8 @@ def selftest():
                and abs(_ref(r.split()[0])[0].getSubObject(r.split()[0].split('.')[1]).BoundBox.ZMin - min(zf)) < 1e-6)
             Gui.Selection.clearSelection()
             ck('pdf_guard', "?TechDrawGui.exportPageAsPdf", lambda r: 'crashes' in r)
-            fn = os.path.join(tempfile.mkdtemp(prefix='fdmkit_'), 'fdmkit_checks.FCStd')
+            tmp = tempfile.mkdtemp(prefix='fdmkit_')
+            fn = os.path.join(tmp, 'fdmkit_checks.FCStd')
             d5.saveAs(fn)
             ck('reopen', "reopen(True)", lambda r: r.startswith('reopen: OK'))
             live = App.ActiveDocument.Name
@@ -2758,6 +2869,9 @@ def selftest():
             if live in App.listDocuments():
                 App.closeDocument(live)
             App.setActiveDocument(d.Name)
+            if tmp:
+                import shutil
+                shutil.rmtree(tmp, ignore_errors=True)
         d6 = App.newDocument('fdmkit_cnc', 'fdmkit_cnc', True, True)
         try:
             App.setActiveDocument(d6.Name)
@@ -2868,5 +2982,13 @@ def selftest():
         App.closeDocument(d.Name)
         if prev and prev in App.listDocuments():
             App.setActiveDocument(prev)
+        if App.GuiUp:
+            Gui.Selection.clearSelection()
+            for dn, on, subs in picked:
+                for sub in subs:
+                    try:
+                        Gui.Selection.addSelection(dn, on, sub)
+                    except Exception:
+                        pass
     bad = [f'{label}: {r}' for label, good, r in res if not good]
     return f'selftest {len(res) - len(bad)}/{len(res)}' + (' | ' + ' | '.join(bad) if bad else ' OK')

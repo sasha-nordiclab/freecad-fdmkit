@@ -14,7 +14,8 @@ DESCRIPTION = """Run fdmkit calls in the open FreeCAD. 'a(); b(); c()' = one tra
 per call; any ERR rolls the whole batch back. Batch related steps to save round trips.
 Lengths/angles: number or expression; bare params names allowed ('wall*2').
 P(name=val,...) set (lengths 'x mm') | P() list | new(name) = NEW DOCUMENT; a Body in the open
-one: App.ActiveDocument.addObject('PartDesign::Body',n) + setActiveObject('pdbody') | plane(name, base='XY'|datum, offset)
+one: b=App.ActiveDocument.addObject('PartDesign::Body',n); Gui.ActiveDocument.ActiveView.setActiveObject('pdbody',b)
+(else helpers use the last Body; sk() names it when there are several) | plane(name, base='XY'|datum, offset)
 sk(name, on='XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
 Parallel loft sections: attach sketches to an origin plane and set a parametric
 AttachmentOffset; create separate datum planes only when they add a real reference.
@@ -25,7 +26,7 @@ half(sk) cuts a sketch symmetric about its H axis to y>=0, in place
 pad(sk,len,side='one'|'two'|'sym',reverse,length2) | pocket(sk,depth='through',reverse,depth2)
 side='two' needs length2/depth2 (a number, expression or 'through') | revolve(sk,angle=360,axis='V_Axis'|'Z')
 26.3 starts: pad/pocket/revolve/groove(...,start='profile'|'offset'|'reference',
-offset=expr,reference='XY'|datum|(sk,(x,y))); pocket/groove/hole(...,operation='subtract'|'common')
+offset=expr (revolve/groove: deg),reference='XY'|datum|(sk,(x,y))); pocket/groove/hole(...,operation='subtract'|'common')
 Offset runs along the feature: pad +normal, pocket into the cut (pocket offset=-6 starts 6 above).
 Sketch regions (26.3 internals): pad/pocket(...,at=(x,y)|[(x,y),...]) use only the closed
 regions under those sketch-coord points, so one master sketch drives several features;
@@ -44,12 +45,12 @@ one feature for a row or a grid (2x2 mount holes); step2/extent2 default to step
 polar(features,occurrences,axis='Z',angle=360,suppressed=()) indices are zero-based
 circular(features,rings,radial,tangential,axis='Z',symmetry=1) concentric circles |
 path_pattern(features,path,count=None,spacing=None,align=False) first instance = original |
-point_pattern(features,sketch) at circle centres, the first centre marks the original.
+point_pattern(features,points) at a sketch's points/circle centres or 'Feature.VertexN'; first = original.
 Every pattern becomes the Body Tip; a pattern that changes nothing is an ERR.
 defeature(['Tip.Face7',...]) removes faces of the Body Tip and heals | thickness(faces,value,
 mode='skin'|'recto_verso',join='arc'|'intersection',inward=True) shell; fails on complex solids
 mirror([features],plane='XY'|datum) PartDesign::Mirrored | move(feature, after)
-dim(sk,'r1_w',val) (angles in deg) | chk(body=None) | why(name) | tree() | selftest()
+dim(sk,'r1_w',val) (angles in deg) | chk(body=None) | why(name) | tree() | selftest() | reload() alone in a call
 undo() reverts the last committed call and names it; right after an ERR it refuses once.
 mass(*objs,density=g/cm³) = V, m, CoG, principal I (materials' density unless 'Default')
 LINKS/ASSEMBLY: link_array(source,'linear'|'polar'|'path'|'point',count,step,axis,angle,path,
@@ -64,7 +65,7 @@ i10g_video() = render the i10g Animation async (hidden links dropped); wait for 
 CHECK: check() = whole document: one valid solid per Body, no errors, DoF 0, no Body
 intersections, every Fasteners object on a hole axis | lint() = traps: lost sketch regions/refs, hole sketch tangent
 to a cylinder, countersink apex on the hole floor, sketches placed by plain numbers,
-cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set,
+cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set (a bare number keeps the cell's unit),
 check(), restore (stress test) | sel() = GUI selection + distance, angle of axes/normals,
 distance of parallel hole axes, diameters; names items 'pad.Face6'/'sk.Edge1', usable as refs |
 reopen() = save, close, open, recompute (clears undo). full() reports lost Assembly joint refs.
