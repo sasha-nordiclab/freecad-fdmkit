@@ -18,7 +18,10 @@ def call(arg):
     head = (f'import sys, importlib\nsys.path.count({MOD!r}) or sys.path.insert(0, {MOD!r})\n'
             'import fdmkit\n')
     if arg == '--reload':
-        body = "fdmkit = importlib.reload(fdmkit); fdmkit._boot(); print('reloaded', fdmkit.__version__)"
+        body = ("import fdmkit.machining, fdmkit.tests\n"        # submodules bind the core helpers:
+                "for m in ('fdmkit', 'fdmkit.machining', 'fdmkit.tests', 'fdmkit'):\n"  # core, subs, core again
+                "    importlib.reload(sys.modules[m])\n"
+                "fdmkit = sys.modules['fdmkit']; fdmkit._boot(); print('reloaded', fdmkit.__version__)")
     elif arg == '--selftest':
         body = 'print(fdmkit.selftest())'
     else:

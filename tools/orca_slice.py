@@ -43,7 +43,7 @@ def run(stl, process, spec):
     fi = flat('filament', FILAMENT, {}, HERE / f'of_{tag}.json')
     out = HERE / f'oo_{tag}'; shutil.rmtree(out, ignore_errors=True); out.mkdir()
     r = subprocess.run([ORCA, '--slice', '0', '--arrange', '1', '--orient', '0', '--load-settings', f'{m};{pr}',
-                        '--load-filaments', str(fi), '--outputdir', str(out), stl], capture_output=True, text=True)
+                        '--load-filaments', str(fi), '--outputdir', str(out), stl], capture_output=True, text=True, check=False)  # failures are reported below
     try:
         g = next(out.rglob('*.gcode')).read_text(errors='ignore')
         head = g[:40000] + g[-40000:]

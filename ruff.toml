@@ -1,0 +1,9 @@
+# uvx ruff check  (run before each commit)
+line-length = 120
+
+[lint]
+select = ["F", "E9", "B", "PLW2901"]
+ignore = ["B007", "B905"]   # unused loop names and zip() pairs are deliberate in the sketch/CNC loops
+
+[lint.per-file-ignores]
+"fdmkit/__init__.py" = ["E402"]

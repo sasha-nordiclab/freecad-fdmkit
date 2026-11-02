@@ -4,12 +4,13 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
 
 - Target: FreeCAD 27.1 weekly (2026-10-27 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
 - Layout:
-  - `fdmkit/__init__.py` is the whole kit.
+  - `fdmkit/__init__.py` is the kit core: helpers, sketches, features, checks, assembly, speed, `run()`.
+  - `fdmkit/machining.py` holds the CNC/CAM calls, `fdmkit/tests.py` the selftest. Both import core helpers with `from . import ...`, so `tools/fc.py --reload` reloads fdmkit, machining, tests, then fdmkit again.
   - `Init.py` is the autoload entry.
   - `tools/fc.py` is the XML-RPC client.
   - `fdmkit_mcp/server.py` is the MCP server: one tool, `run`, no dependencies.
 - This repo is symlinked as `~/Library/Application Support/FreeCAD/v27-1/Mod/fdmkit` (FreeCAD keeps one user dir per version; migrating settings copies the link). `tools/fc.py` imports from the repo itself, not from a versioned Mod path.
-- After editing, run `python3 tools/fc.py --reload && python3 tools/fc.py --selftest`. The selftest must stay all-OK; add a check for each new function.
+- After editing, run `python3 tools/fc.py --reload && python3 tools/fc.py --selftest` and `uvx ruff check` (config in ruff.toml). The selftest must stay all-OK; add a check for each new function. Its `docs_sync` check fails when a public call is missing from the MCP description or the README table.
 - Rules:
   - Only native PartDesign: no Part::Feature blobs.
   - Each call is one transaction and returns one line.
