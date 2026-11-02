@@ -6,6 +6,7 @@ Shared by Claude Code and Codex; forwards to the running FreeCAD via tools/fc.py
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
 import fc  # noqa: E402
@@ -66,7 +67,9 @@ CHECK: check() = whole document: one valid solid per Body, no errors, DoF 0, no 
 intersections, every Fasteners object on a hole axis | lint() = traps: lost sketch regions/refs, hole sketch tangent
 to a cylinder, countersink apex on the hole floor, sketches placed by plain numbers,
 cross-Body expression refs, unused params | case('alias'|'sheet.alias', value) = set (a bare number keeps the cell's unit),
-check(), restore (stress test) | sel() = GUI selection + distance, angle of axes/normals,
+check(), restore (stress test) | errors() = new errors/tracebacks in FreeCAD's Report view
+(addons, recomputes, GUI); when FreeCAD reported errors since the last call, the result ends
+with ' | FreeCAD report: N new errors since the last call' - read errors() and fix the cause | sel() = GUI selection + distance, angle of axes/normals,
 distance of parallel hole axes, diameters; names items 'pad.Face6'/'sk.Edge1', usable as refs |
 reopen() = save, close, open, recompute (clears undo). full() reports lost Assembly joint refs.
 TechDraw: SVG export only (exportPageAsPdf crashes 26.3; untested on 27.1).
@@ -139,6 +142,25 @@ INSTRUCTIONS = """fdmkit rules (full text: skill/rules.md, fem.md; read the name
    assembled solids both ways, test drivers and joints, then reopen(),
    check(*assembly_link_names), lint(), cnc() for metal."""
 
+LOG = os.path.expanduser('~/Library/Logs/fdmkit/mcp.log')
+
+
+def log_call(expr, out, seconds):
+    """One JSON line per call (time, seconds, expr, result) in ~/Library/Logs/fdmkit/mcp.log;
+    rotated at 5 MB. Logging never breaks a call."""
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        if os.path.exists(LOG) and os.path.getsize(LOG) > 5e6:
+            os.replace(LOG, LOG + '.1')
+        rec = {'t': time.strftime('%Y-%m-%d %H:%M:%S'), 's': round(seconds, 2),
+               'expr': expr[:500], 'out': out[:1000],
+               'err': out.startswith(('ERR', 'RPC ERR')) or ' | FreeCAD report:' in out}
+        with open(LOG, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+    except OSError:
+        pass
+
+
 TOOL = {'name': 'run', 'description': DESCRIPTION,
         'inputSchema': {'type': 'object', 'properties': {'expr': {'type': 'string'}},
                         'required': ['expr']}}
@@ -159,10 +181,13 @@ def handle(msg):
         p = msg.get('params') or {}
         if p.get('name') != 'run':
             return {'jsonrpc': '2.0', 'id': mid, 'error': {'code': -32602, 'message': 'unknown tool'}}
+        expr = (p.get('arguments') or {}).get('expr', '')
+        t0 = time.time()
         try:
-            out = fc.call((p.get('arguments') or {}).get('expr', ''))
+            out = fc.call(expr)
         except Exception as e:      # HTTP errors, XML faults, bad bytes: still answer this id
             out = f'RPC ERR {type(e).__name__}: {e}'
+        log_call(expr, out, time.time() - t0)
         result = {'content': [{'type': 'text', 'text': out}],
                   'isError': out.startswith(('ERR', 'RPC ERR'))}
     elif method == 'ping':

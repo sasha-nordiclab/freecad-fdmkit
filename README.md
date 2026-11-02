@@ -110,6 +110,7 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `dim(sk, 'r1_w', val)` | Change one named sketch dimension |
 | `chk(body=None)` / `why(name)` / `tree()` | Checks of one Body (default the active one), one failure explained, feature tree |
 | `undo()` | Undo the last committed batch and name it; refuses once right after an ERR |
+| `errors(keep=False)` | New errors and tracebacks from FreeCAD's Report view since the last call, one line; when FreeCAD reported errors since the previous call, the result ends with ` \| FreeCAD report: N new errors since the last call`. Also logged to `~/Library/Logs/fdmkit/freecad.log`; the MCP server logs every call to `~/Library/Logs/fdmkit/mcp.log` |
 | `selftest()` | Build throwaway parts in hidden documents and check every call; one line with the failures |
 | `focus(body, ...)` / `full()` | Recompute only these Bodies until `full()`, which recomputes everything and solves every Assembly |
 | `freeze(name, ...)` / `thaw(name, ...)` | Std_ToggleFreeze on heavy objects (Assembly, gears, STEP parts) |

@@ -21,7 +21,7 @@ def selftest():
     res = []
 
     def ck(label, expr, test):
-        r = run(expr)
+        r = run(expr).split(' | FreeCAD report:')[0]
         try:
             ok = bool(test(r))
         except Exception:
@@ -81,6 +81,12 @@ def selftest():
             App.closeDocument('fdmkit_new_probe')
         App.setActiveDocument(d.Name)
         ck('docs_sync', "?1", lambda r: not _undocumented())
+        ck('errors', "App.Console.PrintError('fdmkit selftest probe Error\\n')",
+           lambda r: True)
+        if App.GuiUp:   # the Report view gets the message from Qt's event loop
+            from PySide import QtWidgets
+            QtWidgets.QApplication.processEvents()
+        ck('errors_list', "errors()", lambda r: 'fdmkit selftest probe Error' in r or not App.GuiUp)
         ck('ns_read', "?(App.ActiveDocument.Name, 'Gui' in globals())",
            lambda r: d.Name in r and 'True' in r)
         ck('ns_write', "App.ActiveDocument.Name", lambda r: r == d.Name)

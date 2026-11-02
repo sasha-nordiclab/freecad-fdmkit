@@ -7,6 +7,7 @@ constraints and fails (rolling back) unless the sketch ends at DoF 0.
 """
 import ast
 import math
+import os
 import re
 import time
 
@@ -20,7 +21,7 @@ __all__ = ['new', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly'
            'path_pattern', 'point_pattern', 'mirror', 'move', 'defeature', 'thickness',
            'dim', 'chk', 'why', 'tree', 'check', 'lint', 'case', 'sel', 'mass', 'reopen',
            'link_array', 'rigid_group', 'snapshot', 'snapshot_restore',
-           'undo', 'selftest', 'focus', 'full', 'freeze', 'thaw',
+           'undo', 'errors', 'selftest', 'focus', 'full', 'freeze', 'thaw',
            'freeze_all', 'thaw_all', 'i10g_video',
            'cnc', 'cnc_show', 'cnc_restore', 'cam_job', 'cam_slot', 'cam_sim', 'cam_del']
 
@@ -2046,6 +2047,75 @@ def i10g_video(delay_ms=300):
             f'@{a.FPS} -> {a.OutputFilename}; {pruned} hidden entries dropped')
 
 
+# ---------------------------------------------------------------- FreeCAD report
+LOG_DIR = os.path.expanduser('~/Library/Logs/fdmkit')
+_ERR_ENTRY = re.compile(r'Traceback|Error|Exception|Segmentation fault|Assertion|failed')
+_STAMP = re.compile(r'^\d\d:\d\d:\d\d\s')
+_report = {'seen': 0, 'pending': []}
+
+
+def _report_lines():
+    """Lines of the GUI Report view; [] without a GUI."""
+    if not App.GuiUp:
+        return []
+    import FreeCADGui as Gui
+    from PySide import QtWidgets
+    w = Gui.getMainWindow().findChild(QtWidgets.QTextEdit, 'Report view')
+    return w.toPlainText().splitlines() if w else []
+
+
+def _report_scan():
+    """Error entries added to the Report view since the last scan (a cleared view starts over).
+    They are kept for errors() and appended to LOG_DIR/freecad.log."""
+    try:
+        lines = _report_lines()
+    except Exception:
+        return []
+    start = _report['seen'] if _report['seen'] <= len(lines) else 0
+    _report['seen'] = len(lines)
+    entries = []
+    for ln in lines[start:]:
+        if _STAMP.match(ln) or not entries:
+            entries.append([ln])
+        else:
+            entries[-1].append(ln)
+    new = []
+    for e in entries:
+        cut = next((i for i, x in enumerate(e) if x.strip() == '--- code ---'), None)
+        e = e[:cut] if cut else e      # the RPC server echoes the failing code after its error
+        if not _ERR_ENTRY.search(' '.join(e)):
+            continue
+        last = next((x.strip() for x in reversed(e) if x.strip()), '')
+        head = e[0].strip()
+        new.append(head if last == head else f'{head} … {last}')
+    if new:
+        _report['pending'] += new
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            with open(os.path.join(LOG_DIR, 'freecad.log'), 'a', encoding='utf-8') as f:
+                f.write(''.join(f'{time.strftime("%Y-%m-%d")} {x}\n' for x in new))
+        except OSError:
+            pass
+    return new
+
+
+def errors(keep=False):
+    """New errors and tracebacks in FreeCAD's Report view since the last errors() (addons,
+    recomputes, the GUI, the RPC server): one line, repeated messages counted. keep=True
+    leaves them pending. All of them are also in ~/Library/Logs/fdmkit/freecad.log."""
+    _report_scan()
+    got = list(_report['pending'])
+    if not keep:
+        _report['pending'] = []
+    if not got:
+        return 'errors: none'
+    count = {}
+    for x in got:
+        key = _STAMP.sub('', x).strip()
+        count[key] = count.get(key, 0) + 1
+    return f'errors: {len(got)} | ' + ' | '.join(f'{k[:220]}' + (f' ×{n}' if n > 1 else '') for k, n in count.items())
+
+
 # ---------------------------------------------------------------- entry
 AUTOSAVE_S = 300
 _saved = {}
@@ -2085,6 +2155,18 @@ def run(expr):
     Any failure rolls the whole batch back and names the failing step.
     '?expr' is read-only: its document changes are discarded, no recompute, no autosave."""
     expr = expr.strip()
+    if expr.replace(' ', '') in ('errors()', 'errors(keep=True)'):
+        return _run(expr)
+    # the Report view gets messages from Qt's event loop, so an error of the previous call often
+    # arrives only now: count everything new since the last call
+    n = len(_report_scan())
+    r = _run(expr)
+    n += len(_report_scan())
+    return r + (f' | FreeCAD report: {n} new error{"s" * (n > 1)} since the last call, errors() lists them'
+                if n else '')
+
+
+def _run(expr):
     if 'exportPageAsPdf' in expr:
         return 'ERR exportPageAsPdf crashes FreeCAD 26.3; use TechDrawGui.exportPageAsSvg'
     try:
