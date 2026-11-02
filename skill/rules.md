@@ -259,7 +259,7 @@ Applies when a model is rebuilt from caliper measurements of an original part.
 - When the user says the part will be made in metal, the FDM rules (walls, ligaments, overhangs, oversized holes) do not apply. Use metal practice: ISO 273 clearances, tap drills, cosmetic threads, standard screws.
 
 ## Fasteners in models (2026-10-24)
-- Take screws from the Fasteners workbench. When a standard or size is missing (no DIN 963, no M1 in ISO 2009), add a CSV row as a patch in `tools/patches/` (`fasteners-din963-m1.patch`) instead of drawing the screw. The patch is lost on an add-on update, so re-apply it.
+- Take screws from the Fasteners workbench. When a standard or size is missing (no DIN 963, no M1 in ISO 2009), add a CSV row as a patch in `tools/patches/` (`fasteners-din963-m1.patch`; `fasteners-pcb-m3x5-l6.patch` adds length 6 to M3 hex-5.0 PCBSpacer/PCBStandoff) instead of drawing the screw. The patch is lost on an add-on update, so re-apply it.
 - Fasteners rewrites `Label` on every recompute (`M1x1.4-Screw…`); keep the standard and the installation site in `Label2`.
 - Clamped parts get clearance holes and the threaded part gets a tapped hole. A screw that threads into both parts cannot clamp them.
 
