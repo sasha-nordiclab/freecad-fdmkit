@@ -7,6 +7,11 @@ The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger
   - Without `SecondOrderLinear 1`, curved C3D10 elements fail with "nonpositive jacobian".
 - Solve: `…/bin/ccx`, linear static, one STEP per load case.
 - Time budget (user rule: slowness is a defect): a contact solve on 114 k nodes / 70 k C3D10 took 72 min. Screen designs with `-clmax 4.5 -clmin 1.5` (≈ 3× fewer nodes), run ccx in the background, and refine only the final variant around the peak. Tell the user the expected run time before starting.
+- ccx traps (2026-11-03, ScreenStand):
+  - Several load cases as STEPs in one deck: write `*CLOAD,OP=NEW` (and `*DLOAD,OP=NEW`) in every STEP; the default OP=MOD adds the previous steps' loads (case 2 carried 60 N instead of 30 N). Check ΣRF = case load per STEP.
+  - The job name (path without `.inp`) must be ≤ 127 characters: run `ccx -i <short name>` with `cwd` set to the job folder; the scratchpad path is too long.
+  - `.dat` stress headers read `stresses (elem, integ.pnt.,sxx,…) for set EALL and time …`: split cases on that line, not on a guessed keyword.
+  - Nodal loads on a few seat nodes of C3D10 give a local singularity (u > 1 inside the 6 mm exclusion); report the peak outside it.
 - Put temporary STEP and mesh files only in the scratchpad and delete them afterwards. Never write them into the project unless asked.
 - Ask before exporting anything. Do not mesh with chamfers ≤ 0.5 mm, because they make the mesh many times heavier; say so in the report.
 

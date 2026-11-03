@@ -260,6 +260,9 @@ Applies when a model is rebuilt from caliper measurements of an original part.
 
 ## Fasteners in models (2026-10-24)
 - Take screws from the Fasteners workbench. When a standard or size is missing (no DIN 963, no M1 in ISO 2009), add a CSV row as a patch in `tools/patches/` (`fasteners-din963-m1.patch`; `fasteners-pcb-m3x5-l6.patch` adds length 6 to M3 hex-5.0 PCBSpacer/PCBStandoff) instead of drawing the screw. The patch is lost on an add-on update, so re-apply it.
+- Insert fasteners only the standard way (user, 2026-11-03): select the hole edges, `Gui.runCommand('FS<Type>')` (`FSISO7045`, `FSPCBStandoff`, …) gives one attached fastener per edge; then set Diameter, Width, Length (recompute between: each enumeration fills after it), orientation with `Invert`, axial position with `Offset`. Never hand-build with `addObject` + `FSScrewObject` or `copyObject`: no view provider, the user cannot see or select them.
+  - On an App::Link to an App::Part the edge must be `Child.EdgeN` (`HalfHolesBoard.Edge16`); a flat `EdgeN` makes `getSubObject` return None and the fastener stays at the origin.
+  - After a CSV patch in a running FreeCAD, reload that file into `FastenerBase.FsData` (`FSutils.csv2dict`); Fasteners reads the CSVs once at import.
 - Fasteners rewrites `Label` on every recompute (`M1x1.4-Screw…`); keep the standard and the installation site in `Label2`.
 - Clamped parts get clearance holes and the threaded part gets a tapped hole. A screw that threads into both parts cannot clamp them.
 
