@@ -1,5 +1,7 @@
 # fdmkit: agent notes
 
+Global user workflow: one working FCStd per project, history in Git. One small change -> focused check -> save the same file -> Git commit. No versioned model copies, backup/archive folders or per-revision scripts/reports unless explicitly requested. This overrides older copy-based migration notes.
+
 These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` and `skill/rules.md`.
 
 - Target: FreeCAD 27.1 weekly (2026-10-27 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
@@ -36,7 +38,7 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
 - Sheet cells set with a bare number are unitless and break mm expressions; the description says `'x mm'`.
 - Placing a radial sketch: the XZ sketch normal is −Y; the AttachmentOffset pattern is in the description.
 
-- Local-coordinate workflow (ORWO 828, 2026-10-30): the MCP description/instructions and `skill/rules.md` now specify functional local Body origins, geometric symmetry constraints, native Assembly placement, and baseline-preserving migration. `check(*link_names)` checks assembled local parts; default `check()` checks overlapping authoring Bodies. `case()` does not explicitly solve the Assembly. Open a working copy in its own call before editing: transaction rollback belongs to the document active at call entry. No new conversion API was added; this is a modelling procedure.
+- Local-coordinate workflow (ORWO 828, 2026-10-30): the MCP description/instructions and `skill/rules.md` now specify functional local Body origins, geometric symmetry constraints, native Assembly placement, and baseline-preserving migration. `check(*link_names)` checks assembled local parts; default `check()` checks overlapping authoring Bodies. `case()` does not explicitly solve the Assembly. Activate the canonical document in its own call before editing: transaction rollback belongs to the document active at call entry. No new conversion API was added; this is a modelling procedure.
 
 - 26.3/27.1 features (2026-10-31, from the official 26.3 release notes, probed on the 27.1 weekly): `midplane`, Revolution/Groove `type`/`up_to`, `circular`, `path_pattern`, `point_pattern`, `defeature`, `thickness`, `mass`, `sel()` axis angle, `link_array`, `rigid_group`, `snapshot`/`snapshot_restore`; selftest 88/88. Probed facts:
   - `body.newObject()` leaves the Tip on the pattern's original, so a feature added after `polar()` silently dropped the pattern from the Body shape (a bug in 0.2.0). `_pattern()` now sets `body.Tip`. A pattern gets its BaseFeature only on recompute; compare volumes after `_rc`.

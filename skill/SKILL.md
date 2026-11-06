@@ -8,7 +8,8 @@ description: Model FDM and metal CNC parts in the user's running FreeCAD through
 All modelling goes through MCP `fdmkit.run(expr)`. No raw FreeCAD scripts, no screenshots.
 The user watches the model in the GUI. Reply only with OK, the errors or the numbers.
 
-- Batch related steps into one call: `sk('s','XY'); rect('s','w','d'); pad('s','height')`. It is one transaction, so any ERR rolls back the whole batch.
+- One working FCStd per project; use Git for history. Do not create version-named models, backup folders or per-revision scripts/reports unless the user explicitly asks. One small change -> focused check -> save the same file -> Git commit.
+- Batch only the operations belonging to that one logical step: `sk('s','XY'); rect('s','w','d'); pad('s','height')`. It is one transaction, so any ERR rolls back the whole batch.
 - Model each Body about its own functional origin/symmetry planes; native Assembly joints position its Links. Use geometric relationships and construction geometry before minimal named dimensions, never per-vertex coordinate grids or mass Block/Fixed. For migration and assembly-aware checks, follow rules.md "Local part coordinates and assembly placement"; use `check(*assembly_link_names)` for locally authored Bodies.
 - Every size is a `P(...)` parameter. Pass param names or expressions, not literals: `rect('s','w','d')`.
 - Sketches attach to stable origin or datum planes, never generated faces. For parallel loft sections, use one origin plane with each sketch’s expression-driven `AttachmentOffset.Base.z` instead of creating a datum plane per section. Use `plane(name, base, offset)` when a distinct geometric reference is needed. Keep sketches fully constrained and verify the loft after simplifying supports.

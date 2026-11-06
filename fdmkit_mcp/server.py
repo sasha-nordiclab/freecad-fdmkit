@@ -11,7 +11,9 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
 import fc  # noqa: E402
 
-DESCRIPTION = """Run fdmkit calls in the open FreeCAD. 'a(); b(); c()' = one transaction, one result
+WORKFLOW_POLICY = 'GLOBAL WORKFLOW: ONE working FCStd per project; history in Git. No versioned model copies, backup folders or per-revision scripts/reports unless requested. One small change -> check -> save SAME file -> Git commit. Batch only that step.'
+
+DESCRIPTION = WORKFLOW_POLICY + "\n\n" + """Run fdmkit calls in the open FreeCAD. 'a(); b(); c()' = one transaction, one result
 per call; any ERR rolls the whole batch back. Batch related steps to save round trips.
 Lengths/angles: number or expression; bare params names allowed ('wall*2').
 P(name=val,...) set (lengths 'x mm') | P() list | new(name) = NEW DOCUMENT; a Body in the open
@@ -92,7 +94,7 @@ For local source Bodies, check(*assembly_link_names) / case(name, value, *assemb
 check the assembled parts; plain check() would compare Bodies overlapping at their origins.
 Migration procedure: skill/rules.md "Local part coordinates and assembly placement"."""
 
-INSTRUCTIONS = """fdmkit rules (full text: skill/rules.md, fem.md; read the named section first).
+INSTRUCTIONS = WORKFLOW_POLICY + "\n\n" + """fdmkit rules (full text: skill/rules.md, fem.md; read the named section first).
 1. Understand the part in use: mounting, load paths, real loads, mating parts. Proven
    functional details (ledges, fits) stay unless told.
 2. Standard first: native features, installed workbenches (rules.md "Standard workbenches
@@ -138,9 +140,8 @@ INSTRUCTIONS = """fdmkit rules (full text: skill/rules.md, fem.md; read the name
    profile; inside corners along the cutter axis = params.CncCornerRadius, floor-wall
    corners sharp; ISO tap drills, ISO 273 clearances; cnc() after each change; show doubts
    with cam_job + cam_slot + cam_sim on the real model.
-18. Migration to local coordinates: on a copy with an untouched baseline; compare the
-   assembled solids both ways, test drivers and joints, then reopen(),
-   check(*assembly_link_names), lint(), cnc() for metal."""
+18. Local-coordinate migration: Git checkpoint, no file copies; compare assembled geometry
+   both ways, test drivers/joints, reopen/check/lint (cnc for metal)."""
 
 LOG = os.path.expanduser('~/Library/Logs/fdmkit/mcp.log')
 
