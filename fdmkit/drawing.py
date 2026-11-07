@@ -506,9 +506,11 @@ def dim_add(page, view, name, kind, refs, fmt='%.2f'):
     return f'dim_add: {o.Name} {kind} {_text(o)} on {v.Name} {sub}'
 
 
-def title_block(page):
+def title_block(page, fields=6.2):
     """Title block box (x0, y0, x1, y1 page mm, Y up) read from the template SVG: the text cluster
-    in the lower right part, widened to the frame. None if the template has no such texts."""
+    in the lower right part, widened to the frame, raised by `fields` mm for the field row above it
+    (A4 ISO 5457 advanced: top 71; the projection symbol box is `projection_symbol`). None without
+    such texts."""
     p = _page(page)
     W, H = p.Template.Width.Value, p.Template.Height.Value
     try:
@@ -519,7 +521,16 @@ def title_block(page):
     tb = [(x, y) for x, y in pts if x > W / 3 and 0.7 * H < y < H - FRAME[1]]
     if not tb:
         return None
-    return (min(x for x, _ in tb) - 3, FRAME[1], W - FRAME[2], H - (min(y for _, y in tb) - 4))
+    return (min(x for x, _ in tb) - 3, FRAME[1], W - FRAME[2], H - (min(y for _, y in tb) - 4) + fields)
+
+
+def projection_symbol(page):
+    """Projection symbol box above the title block (ISO 5457 advanced templates), page mm, Y up."""
+    p = _page(page)
+    if 'ISO5457' not in str(p.Template.Template):
+        return None
+    W = p.Template.Width.Value
+    return (W - 43, 63, W - 15, 77)
 
 
 def _annot_box(o):
@@ -588,7 +599,7 @@ def _spread(groups, lo, hi, maxgap):
     return out, gap
 
 
-def view_layout(page, keepout=(), maxgap=25, attach=12, apply=True):
+def view_layout(page, keepout=(), maxgap=25, attach=12, pad=1.5, apply=True):
     """Place the part views of a page near the centre of the free drawing field, by computation.
     Field = sheet frame minus the template title block, free annotations (notes, BOM) and `keepout`
     boxes (x0, y0, x1, y1 page mm, Y up). A view's envelope covers its visible edges and its
@@ -612,10 +623,10 @@ def view_layout(page, keepout=(), maxgap=25, attach=12, apply=True):
         for s in ([it['line']] if 'line' in it else []) + it.get('ext', []):
             env[n] = _grow(env[n], (min(s[0][0], s[1][0]), min(s[0][1], s[1][1]),
                                     max(s[0][0], s[1][0]), max(s[0][1], s[1][1])))
+    env = {n: (e[0] - pad, e[1] - pad, e[2] + pad, e[3] + pad) for n, e in env.items()}
     obst = [tuple(k) for k in keepout]
     tb = title_block(p)
-    if tb:
-        obst.append(tb)
+    obst += [b for b in (tb, projection_symbol(p)) if b]
     follow = {}
     for o in p.Views:
         if o.TypeId != 'TechDraw::DrawViewAnnotation':
@@ -640,8 +651,25 @@ def view_layout(page, keepout=(), maxgap=25, attach=12, apply=True):
     F = _field(frame, obst, need)
     dx, gx = _spread(cols, F[0], F[2], maxgap)
     dy, gy = _spread(rows, F[1], F[3], maxgap)
+    warn = []
+    if gy < 0:
+        # Rows too tall for the common field: centre each column in its own free height (frame
+        # minus the obstacles under its shifted x span); horizontal alignment is given up.
+        dy = {}
+        for names, a, b in cols:
+            s = dx[names[0]]
+            x0, x1 = a + s, b + s
+            lo = max([frame[1]] + [o[3] for o in obst if o[0] < x1 and x0 < o[2] and o[3] < (frame[1] + frame[3]) / 2])
+            hi = min([frame[3]] + [o[1] for o in obst if o[0] < x1 and x0 < o[2] and o[1] > (frame[1] + frame[3]) / 2])
+            sub = _clusters({n: env[n] for n in names}, 1)
+            d, g = _spread(sub, lo, hi, maxgap)
+            dy.update(d)
+            if g < 0:
+                warn.append(f'column {names[0]} needs {sum(r[2] - r[1] for r in sub):.0f} of {hi - lo:.0f}')
+        gy = 0
     moves = {n: (round(dx[n], 2), round(dy[n], 2)) for n in env}
-    warn = [f'does not fit field (need {need[0]:.0f} x {need[1]:.0f})'] if gx < 0 or gy < 0 else []
+    if gx < 0:
+        warn.append(f'does not fit field width (need {need[0]:.0f})')
     if not apply:
         return dict(field=[round(x, 1) for x in F], moves=moves, follow=follow, warn=warn)
     d = App.ActiveDocument
