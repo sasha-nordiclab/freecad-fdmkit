@@ -533,6 +533,156 @@ def projection_symbol(page):
     return (W - 43, 63, W - 15, 77)
 
 
+def page_sync(page):
+    """Prepare a page for sheet_fit / export without a hidden-line recompute: KeepUpdated on,
+    dimensions/annotations/balloons touched, page recomputed. Call sheet_fit or export in the NEXT
+    run() call. Restore KeepUpdated=False yourself afterwards when the page should stay frozen."""
+    import FreeCADGui as Gui
+    p = _page(page)
+    p.KeepUpdated = True
+    for o in p.Views:
+        if o.TypeId in ('TechDraw::DrawViewDimension', 'TechDraw::DrawViewAnnotation', 'TechDraw::DrawViewBalloon'):
+            o.touch()
+    p.recompute(True)
+    Gui.updateGui()
+    return f'page_sync {p.Name}: call sheet_fit/export in the next call'
+
+
+def _strip_template(svg):
+    """Exported page SVG without the template group: only the drawing content stays."""
+    i = svg.find('id="DrawingContent"')
+    if i < 0:
+        raise RuntimeError('exported SVG has no DrawingContent group')
+    dc = svg.rfind('<g', 0, i)
+    first = svg.find('<g')                     # TechDraw layer group
+    tpl = svg.find('<g', svg.find('>', first) + 1)
+    return svg[:tpl] + svg[dc:] if tpl < dc else svg
+
+
+def ink(page, ppm=5):
+    """Exact ink of the page as exported: TechDrawGui.exportPageAsSvg to a temp file, template
+    stripped, rasterised with QtSvg at `ppm` px/mm. Returns a numpy bool array (row 0 = top edge).
+    No picture is kept or shown. Run page_sync one call before."""
+    import os
+    import tempfile
+    import numpy as np
+    import TechDrawGui
+    from PySide import QtCore, QtGui, QtSvg
+    p = _page(page)
+    import FreeCADGui as Gui
+    d = tempfile.mkdtemp(prefix='fdmkit_ink_')
+    f = os.path.join(d, p.Name + '.svg')
+    # Proven 27.1 order: open the page, process events, export in the same call. A page opened in
+    # an earlier call and exported later segfaulted in ViewProviderPage::setTemplateMarkers.
+    Gui.ActiveDocument.getObject(p.Name).doubleClicked()
+    Gui.updateGui()
+    TechDrawGui.exportPageAsSvg(p, f)
+    with open(f, encoding='utf-8') as fh:
+        svg = _strip_template(fh.read())
+    W, H = p.Template.Width.Value, p.Template.Height.Value
+    w, h = int(round(W * ppm)), int(round(H * ppm))
+    img = QtGui.QImage(w, h, QtGui.QImage.Format_ARGB32)
+    img.fill(QtCore.Qt.transparent)
+    r = QtSvg.QSvgRenderer(QtCore.QByteArray(svg.encode('utf-8')))
+    pt = QtGui.QPainter(img)
+    r.render(pt, QtCore.QRectF(0, 0, w, h))
+    pt.end()
+    a = np.frombuffer(img.constBits(), np.uint8, img.sizeInBytes()).reshape(h, img.bytesPerLine())
+    return a[:, :w * 4].reshape(h, w, 4)[:, :, 3] > 40
+
+
+class _Ink:
+    """Summed-area table of an ink mask: ink count in any page rectangle (mm, Y up) in O(1)."""
+
+    def __init__(self, mask, W, H, ppm):
+        import numpy as np
+        self.ppm, self.W, self.H = ppm, W, H
+        self.S = np.pad(mask.astype(np.int32).cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+        self.total = int(self.S[-1, -1])
+        ys, xs = np.nonzero(mask)
+        self.box = ((xs.min() / ppm, H - (ys.max() + 1) / ppm, (xs.max() + 1) / ppm, H - ys.min() / ppm)
+                    if len(xs) else None)
+
+    def count(self, r):
+        k = self.ppm
+        h, w = self.S.shape[0] - 1, self.S.shape[1] - 1
+        c0 = min(max(int(round(r[0] * k)), 0), w)
+        c1 = min(max(int(round(r[2] * k)), 0), w)
+        r0 = min(max(int(round((self.H - r[3]) * k)), 0), h)
+        r1 = min(max(int(round((self.H - r[1]) * k)), 0), h)
+        if c1 <= c0 or r1 <= r0:
+            return 0
+        S = self.S
+        return int(S[r1, c1] - S[r0, c1] - S[r1, c0] + S[r0, c0])
+
+
+def _zones(p, keepout, margin):
+    W, H = p.Template.Width.Value, p.Template.Height.Value
+    m = margin
+    inner = (FRAME[0] + m, FRAME[1] + m, W - FRAME[2] - m, H - FRAME[3] - m)
+    z = [('title block', title_block(p)), ('projection symbol', projection_symbol(p))]
+    z += [(f'keepout{i}', tuple(k)) for i, k in enumerate(keepout)]
+    return inner, [(n, (b[0] - m, b[1] - m, b[2] + m, b[3] + m)) for n, b in z if b]
+
+
+def _violations(I, inner, zones, dx=0.0, dy=0.0):
+    """Ink pixels that land outside `inner` or inside a zone after moving the drawing by dx, dy."""
+    out = []
+    shifted = (inner[0] - dx, inner[1] - dy, inner[2] - dx, inner[3] - dy)
+    n = I.total - I.count(shifted)
+    if n:
+        out.append(('frame', n))
+    for name, z in zones:
+        c = I.count((z[0] - dx, z[1] - dy, z[2] - dx, z[3] - dy))
+        if c:
+            out.append((name, c))
+    return out
+
+
+def sheet_fit(page, keepout=(), margin=0.5, max_shift=15, step=0.5, ppm=5, apply=True):
+    """Exact fit of the exported drawing on its sheet. Exports the page (temp file), rasterises the
+    drawing content without the template and checks every ink pixel: inside the drawing frame
+    and outside the title block (with its field row), the projection symbol and `keepout` boxes
+    (page mm, Y up), each grown by `margin`. If it fails, searches the smallest rigid shift of the
+    whole drawing (|dx|, |dy| <= max_shift, `step` mm) that clears everything and, with apply, moves
+    all views/annotations by it; call page_sync + sheet_fit again to confirm. If no shift
+    fits, reports the free room and the overflow so views/dims must be rearranged or rescaled."""
+    p = _page(page)
+    empty = [v.Name for v in _parts(p) if not v.getVisibleEdges()]
+    if empty:
+        return f'sheet_fit {p.Name}: ERR empty view cache ' + ', '.join(empty) + ' (refresh the page first)'
+    W, H = p.Template.Width.Value, p.Template.Height.Value
+    I = _Ink(ink(p, ppm), W, H, ppm)
+    if I.box is None:
+        return f'sheet_fit {p.Name}: ERR empty drawing'
+    inner, zones = _zones(p, keepout, margin)
+    bad = _violations(I, inner, zones)
+    bx = [round(float(v), 1) for v in I.box]
+    if not bad:
+        room = (I.box[0] - inner[0], I.box[1] - inner[1], inner[2] - I.box[2], inner[3] - I.box[3])
+        return f'sheet_fit {p.Name}: OK ink {bx}, room l/b/r/t ' + '/'.join(f'{v:.1f}' for v in room)
+    n = int(max_shift / step)
+    cands = sorted(((i * step, j * step) for i in range(-n, n + 1) for j in range(-n, n + 1)),
+                   key=lambda s: s[0] ** 2 + s[1] ** 2)
+    best = next((s for s in cands if not _violations(I, inner, zones, *s)), None)
+    what = ', '.join(f'{k} {c} px' for k, c in bad)
+    if best is None:
+        over_w = (I.box[2] - I.box[0]) - (inner[2] - inner[0])
+        over_h = (I.box[3] - I.box[1]) - (inner[3] - inner[1])
+        return (f'sheet_fit {p.Name}: ERR does not fit by any shift <= {max_shift} ({what}); ink {bx}; '
+                f'ink size {I.box[2] - I.box[0]:.1f} x {I.box[3] - I.box[1]:.1f}, frame overflow '
+                f'{max(over_w, 0):.1f} x {max(over_h, 0):.1f}; rearrange (view_layout/dim_layout inside) or rescale')
+    if not apply:
+        return f'sheet_fit {p.Name}: ERR {what}; fits with shift {best[0]:+.1f}/{best[1]:+.1f}'
+    for o in p.Views:
+        if o.TypeId in ('TechDraw::DrawViewDimension', 'TechDraw::DrawViewBalloon') or not hasattr(o, 'X'):
+            continue
+        o.X, o.Y = o.X.Value + best[0], o.Y.Value + best[1]
+    p.recompute()
+    return (f'sheet_fit {p.Name}: moved drawing {best[0]:+.1f}/{best[1]:+.1f} to clear {what}; '
+            f'page_sync then sheet_fit again to confirm')
+
+
 def _annot_box(o):
     fs = getattr(o, 'TextSize', 3.5)
     fs = getattr(fs, 'Value', fs)
@@ -701,4 +851,13 @@ def _selftest():
     assert abs(sp['a'] - 25) < 1e-9 and abs(sp['b'] - 35) < 1e-9   # 30 wide + gap 20, centred
     assert [c[0] for c in _clusters({'a': (0, 0, 10, 5), 'b': (5, 9, 12, 20), 'c': (20, 0, 30, 5)}, 0)] == [['a', 'b'], ['c']]
     assert _field((0, 0, 100, 100), [(50, 0, 100, 30)], (40, 40)) == (0, 30, 100, 100)
+    import numpy as np
+    m = np.zeros((20, 30), bool)
+    m[2:4, 5:10] = True                       # 30 x 20 mm page at 1 px/mm: ink x 5..10, y 16..18
+    I = _Ink(m, 30, 20, 1)
+    assert I.box == (5.0, 16.0, 10.0, 18.0) and I.count((0, 0, 30, 20)) == 10 and I.count((0, 0, 5, 20)) == 0
+    assert _violations(I, (1, 1, 29, 17), []) == [('frame', 5)]      # top row above the inner frame
+    assert _violations(I, (1, 1, 29, 17), [], 0, -1) == []           # 1 mm down: clear
+    sv = '<svg><g id="L"><g id="tpl"><path/></g><g fill="none" id="DrawingContent"><path d="x"/></g></g></svg>'
+    assert _strip_template(sv) == '<svg><g id="L"><g fill="none" id="DrawingContent"><path d="x"/></g></g></svg>'
     return 'dim_math OK'

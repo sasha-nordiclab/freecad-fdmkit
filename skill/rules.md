@@ -300,8 +300,18 @@ at the end only when the user asks. `dim_layout(..., apply=False)` plans without
 - View placement: `view_layout(page)` after the refresh and after `dim_layout` (dims widen the
   view envelope). Free field = frame minus title block, notes blocks, keepout; views overlapping in
   x/y move together (projection kept); equal gaps (<= `maxgap` 25), group centred; short captions
-  (<= 3 lines) follow their view. `apply=False` plans. Sequence: refresh -> dim_add -> dim_layout
-  -> view_layout -> dim_check OK -> export.
+  (<= 3 lines) follow their view. `apply=False` plans. Its envelopes are estimates.
+- Exact sheet fit (2026-11-08): `sheet_fit(page)` exports the page to a temp SVG, strips the
+  template, rasterises the ink (QtSvg -> numpy, 5 px/mm) and checks every pixel: inside the frame,
+  outside title block + field row (`title_block`, top 71 on A4 ISO 5457 advanced), projection
+  symbol (`projection_symbol`) and `keepout`, all grown by `margin` 0.5. On failure it finds the
+  smallest rigid shift (<= 15 mm) that clears everything and moves the drawing (confirm with a
+  second run); if none exists it reports the overflow. Reports the free room l/b/r/t. Never judge
+  sheets from pictures; never measure the GUI page scene (stale, see KNOWN_ISSUES.md).
+- Sequence per sheet: refresh -> check getVisibleEdges -> dim_add -> dim_layout -> view_layout ->
+  dim_check OK -> `page_sync` -> NEXT call `sheet_fit` OK -> export. Open + updateGui + export in
+  ONE call (a page opened earlier and exported later segfaulted 27.1); frozen pages need
+  `page_sync` after views move or the SVG keeps stale dimension lines.
 
 ## Animations and exploded views (2026-10-20)
 Proven on the roller stand (`roller-stand/renders/roller_stand_exploded_reel.mp4`, 15 s Reels loop).
