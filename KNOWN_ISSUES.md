@@ -24,3 +24,7 @@ One dated line per critical FreeCAD failure met through fdmkit: call, documents,
   `getVisibleEdges()` is non-empty before export.
 - 2026-11-08: on load, CAM ToolBits report `PropertyPythonObject::toString(): failed for ToolBitEndmill` and
   `AttributeError: 'ToolBitEndmill' object has no attribute 'obj'` (×2, harmless so far; CAM jobs untouched).
+- 2026-11-08 00:45: FreeCAD 27.1 abort (uncaught std::out_of_range) in `TaskSectionView::makeSectionLabel` on OK of
+  the Section View task dialog (GUI edit of an ORWO section view, right after a run() call had renamed page/body
+  Labels/Label2 from ORWO828-NN to OptikOldschool-NN). Workaround: none yet; avoid editing section views in the task
+  dialog after label renames, set SectionSymbol/Label by Python instead.
