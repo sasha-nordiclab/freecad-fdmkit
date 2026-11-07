@@ -116,9 +116,13 @@ INSTRUCTIONS = WORKFLOW_POLICY + "\n\n" + """fdmkit rules (full text: skill/rule
 7. Time/grams: tools/orca_slice.py with the user's presets (A1 NordicLab, 0.20mm NordicLab
    0.6 Ballance, AzureFilm PETG HF); strength parts 100 % zig-zag.
 8. Reply OK / errors / numbers. No exports unless asked; temp files in scratchpad.
-9. At the start of work in a CAD project create/update its AGENTS.md handoff: FreeCAD
-   version + build (?App.Version()), purpose, model, params, verified state, decisions,
-   open questions, how to resume. Update it after each substantive change.
+   Use as few subagents as possible: call run() from the main session; at most one
+   subagent per edit batch, never a separate read-only inspection agent.
+9. Keep the project AGENTS.md minimal (about 60-70 lines) so a new session starts cheap:
+   FreeCAD version, rules, one line per model file, latest verified state, decisions, open
+   questions. Details live in the params sheets and in Git history; no session logs or
+   per-part essays. Update once after a substantive change, replacing outdated lines.
+   When the user asks about trimmed details, read them from Git history (git log, git show <commit>:path).
 10. After every model change: reopen(), check(), lint(); before handover case() on the
    main drivers. reopen() clears the undo history.
 11. Before deleting an object whose expressions use the params sheet, clear them
