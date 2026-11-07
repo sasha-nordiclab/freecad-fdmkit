@@ -295,7 +295,13 @@ at the end only when the user asks. `dim_layout(..., apply=False)` plans without
   to the side of their measured points, flipped when the label leaves the sheet or hits a view.
 - Keep internal section diameters `inside` only when the outside lane would cross many hatched
   walls; inside labels move to the nearest spot clear of edges, labels and lines.
-- The title block is template-specific: pass it as `keepout` (x0, y0, x1, y1, page mm, Y up).
+- The title block is template-specific: pass it as `keepout` (x0, y0, x1, y1, page mm, Y up);
+  `title_block(page)` reads it from the template SVG.
+- View placement: `view_layout(page)` after the refresh and after `dim_layout` (dims widen the
+  view envelope). Free field = frame minus title block, notes blocks, keepout; views overlapping in
+  x/y move together (projection kept); equal gaps (<= `maxgap` 25), group centred; short captions
+  (<= 3 lines) follow their view. `apply=False` plans. Sequence: refresh -> dim_add -> dim_layout
+  -> view_layout -> dim_check OK -> export.
 
 ## Animations and exploded views (2026-10-20)
 Proven on the roller stand (`roller-stand/renders/roller_stand_exploded_reel.mp4`, 15 s Reels loop).

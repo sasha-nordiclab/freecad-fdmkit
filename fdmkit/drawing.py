@@ -506,6 +506,156 @@ def dim_add(page, view, name, kind, refs, fmt='%.2f'):
     return f'dim_add: {o.Name} {kind} {_text(o)} on {v.Name} {sub}'
 
 
+def title_block(page):
+    """Title block box (x0, y0, x1, y1 page mm, Y up) read from the template SVG: the text cluster
+    in the lower right part, widened to the frame. None if the template has no such texts."""
+    p = _page(page)
+    W, H = p.Template.Width.Value, p.Template.Height.Value
+    try:
+        s = open(p.Template.Template, encoding='utf-8').read()
+    except Exception:
+        return None
+    pts = [(float(a), float(b)) for a, b in re.findall(r'<text[^>]*?\bx="([\d.]+)"[^>]*?\by="([\d.]+)"', s)]
+    tb = [(x, y) for x, y in pts if x > W / 3 and 0.7 * H < y < H - FRAME[1]]
+    if not tb:
+        return None
+    return (min(x for x, _ in tb) - 3, FRAME[1], W - FRAME[2], H - (min(y for _, y in tb) - 4))
+
+
+def _annot_box(o):
+    fs = getattr(o, 'TextSize', 3.5)
+    fs = getattr(fs, 'Value', fs)
+    lines = [str(t) for t in getattr(o, 'Text', [])] or ['']
+    w = max(_width(t, fs, getattr(o, 'Font', '')) for t in lines)
+    ls = getattr(o, 'LineSpace', 80)
+    h = len(lines) * fs * (1 + max(ls, 20) / 100.0)
+    x, y = o.X.Value, o.Y.Value
+    return (x - w / 2, y - h / 2, x + w / 2, y + h / 2)
+
+
+def _grow(a, b):
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def _clusters(env, i):
+    """Names grouped by overlapping intervals on axis i (0 = x -> columns, 1 = y -> rows)."""
+    out = []
+    for n in sorted(env, key=lambda n: env[n][i]):
+        a, b = env[n][i], env[n][i + 2]
+        if out and a < out[-1][2]:
+            out[-1][0].append(n)
+            out[-1][2] = max(out[-1][2], b)
+        else:
+            out.append([[n], a, b])
+    return out
+
+
+def _field(frame, obst, need):
+    """Largest free rectangle inside frame avoiding obstacles; prefer one that fits `need` (w, h)."""
+    l, b, r, t = frame
+    xs0 = [l] + [o[2] for o in obst if l < o[2] < r]
+    xs1 = [r] + [o[0] for o in obst if l < o[0] < r]
+    ys0 = [b] + [o[3] for o in obst if b < o[3] < t]
+    ys1 = [t] + [o[1] for o in obst if b < o[1] < t]
+    best = None
+    for x0 in xs0:
+        for x1 in xs1:
+            for y0 in ys0:
+                for y1 in ys1:
+                    if x1 <= x0 or y1 <= y0:
+                        continue
+                    R = (x0, y0, x1, y1)
+                    if any(_ov(R, o) for o in obst):
+                        continue
+                    key = ((x1 - x0) >= need[0] and (y1 - y0) >= need[1], (x1 - x0) * (y1 - y0))
+                    if best is None or key > best[0]:
+                        best = (key, R)
+    return best[1] if best else frame
+
+
+def _spread(groups, lo, hi, maxgap):
+    """groups [[names, a, b]] on one axis -> ({name: shift}, free gap): equal gaps <= maxgap, centred."""
+    total = sum(g[2] - g[1] for g in groups)
+    n = len(groups)
+    gap = (hi - lo - total) / (n + 1)
+    inner = max(min(gap, maxgap), 3) if n > 1 else 0
+    pos = lo + (hi - lo - total - inner * (n - 1)) / 2
+    out = {}
+    for names, a, b in groups:
+        for nm in names:
+            out[nm] = pos - a
+        pos += (b - a) + inner
+    return out, gap
+
+
+def view_layout(page, keepout=(), maxgap=25, attach=12, apply=True):
+    """Place the part views of a page near the centre of the free drawing field, by computation.
+    Field = sheet frame minus the template title block, free annotations (notes, BOM) and `keepout`
+    boxes (x0, y0, x1, y1 page mm, Y up). A view's envelope covers its visible edges and its
+    dimensions (labels, lines, extension lines) plus annotations within `attach` mm (captions), which
+    move with it. Views overlapping in x form columns, in y rows; one shift per column / row keeps
+    projection alignment. Columns and rows get equal gaps (at most `maxgap`), the group is centred.
+    Refresh the page one call before (needs visible edges). Ends with dim_check. apply=False plans."""
+    p = _page(page)
+    parts = _parts(p)
+    empty = [v.Name for v in parts if not v.getVisibleEdges()]
+    if empty:
+        raise RuntimeError('view_layout: no visible edges in ' + ', '.join(empty) + '; refresh the page first')
+    items = _collect(p)
+    off = _offset(items)
+    off = off if off is not None else 0.96 * (items[0]['fs'] if items else 3.5)
+    env = {v.Name: _bbox(_edge_pts(v)) for v in parts}
+    for it in items:
+        _geo(it, off)
+        n = it['v'].Name
+        env[n] = _grow(env[n], it['rect'])
+        for s in ([it['line']] if 'line' in it else []) + it.get('ext', []):
+            env[n] = _grow(env[n], (min(s[0][0], s[1][0]), min(s[0][1], s[1][1]),
+                                    max(s[0][0], s[1][0]), max(s[0][1], s[1][1])))
+    obst = [tuple(k) for k in keepout]
+    tb = title_block(p)
+    if tb:
+        obst.append(tb)
+    follow = {}
+    for o in p.Views:
+        if o.TypeId != 'TechDraw::DrawViewAnnotation':
+            continue
+        box = _annot_box(o)
+        short = len(getattr(o, 'Text', [])) <= 3 and not (tb and _ov(box, tb))
+        near = [n for n, e in env.items() if short
+                and _ov(box, (e[0] - attach, e[1] - attach, e[2] + attach, e[3] + attach))]
+        if short and not near:      # caption above/below a view: centre within its x range
+            near = [n for n, e in env.items() if e[0] <= o.X.Value <= e[2]]
+        if near:
+            n = min(near, key=lambda n: (abs((env[n][0] + env[n][2]) / 2 - o.X.Value),
+                                         min(abs(env[n][1] - o.Y.Value), abs(env[n][3] - o.Y.Value))))
+            follow[o.Name] = n
+            env[n] = _grow(env[n], box)
+        else:
+            obst.append(box)
+    W, H = p.Template.Width.Value, p.Template.Height.Value
+    frame = (FRAME[0] + 2, FRAME[1] + 2, W - FRAME[2] - 2, H - FRAME[3] - 2)
+    cols, rows = _clusters(env, 0), _clusters(env, 1)
+    need = (sum(c[2] - c[1] for c in cols), sum(r[2] - r[1] for r in rows))
+    F = _field(frame, obst, need)
+    dx, gx = _spread(cols, F[0], F[2], maxgap)
+    dy, gy = _spread(rows, F[1], F[3], maxgap)
+    moves = {n: (round(dx[n], 2), round(dy[n], 2)) for n in env}
+    warn = [f'does not fit field (need {need[0]:.0f} x {need[1]:.0f})'] if gx < 0 or gy < 0 else []
+    if not apply:
+        return dict(field=[round(x, 1) for x in F], moves=moves, follow=follow, warn=warn)
+    d = App.ActiveDocument
+    for v in parts:
+        v.X, v.Y = v.X.Value + moves[v.Name][0], v.Y.Value + moves[v.Name][1]
+    for a, n in follow.items():
+        o = d.getObject(a)
+        o.X, o.Y = o.X.Value + moves[n][0], o.Y.Value + moves[n][1]
+    p.recompute()
+    moved = ', '.join(f'{n[len(p.Name):] or n} {m[0]:+.1f}/{m[1]:+.1f}' for n, m in moves.items())
+    return f'view_layout {p.Name}: field {[round(x) for x in F]} | {moved} | ' + (
+        ' '.join(warn) + ' | ' if warn else '') + dim_check(p, keepout=obst)
+
+
 def _selftest():
     """Pure checks (no page needed): label text, lane packing, point grid, segment hits."""
     class F:
@@ -519,4 +669,8 @@ def _selftest():
     assert g.hit((5, 5, 6, 6)) and not g.hit((6, 6, 7, 7))
     assert _seg_hits((0, 0, 2, 2), (1, -1), (1, 3)) and not _seg_hits((0, 0, 2, 2), (3, -1), (3, 3))
     assert _cross(((0, 1), (4, 1)), ((2, 0), (2, 3))) and not _cross(((0, 1), (4, 1)), ((5, 0), (5, 3)))
+    sp, _ = _spread([[['a'], 0, 10], [['b'], 20, 40]], 0, 100, 20)
+    assert abs(sp['a'] - 25) < 1e-9 and abs(sp['b'] - 35) < 1e-9   # 30 wide + gap 20, centred
+    assert [c[0] for c in _clusters({'a': (0, 0, 10, 5), 'b': (5, 9, 12, 20), 'c': (20, 0, 30, 5)}, 0)] == [['a', 'b'], ['c']]
+    assert _field((0, 0, 100, 100), [(50, 0, 100, 30)], (40, 40)) == (0, 30, 100, 100)
     return 'dim_math OK'
