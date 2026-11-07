@@ -7,7 +7,7 @@ These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` 
 - Target: FreeCAD 27.1 weekly (2026-10-27 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
 - Layout:
   - `fdmkit/__init__.py` is the kit core: helpers, sketches, features, checks, assembly, speed, `run()`.
-  - `fdmkit/machining.py` holds the CNC/CAM calls, `fdmkit/tests.py` the selftest. Both import core helpers with `from . import ...`, so `tools/fc.py --reload` reloads fdmkit, machining, tests, then fdmkit again.
+  - `fdmkit/machining.py` holds the CNC/CAM calls, `fdmkit/drawing.py` the TechDraw dimension calls (`dim_add`, `dim_layout`, `dim_check`; frames and rules in its docstring, probed on ORWO 828 sheet 01), `fdmkit/tests.py` the selftest. They import core helpers with `from . import ...`, so `tools/fc.py --reload` reloads fdmkit, machining, drawing, tests, then fdmkit again.
   - `Init.py` is the autoload entry.
   - `tools/fc.py` is the XML-RPC client.
   - `fdmkit_mcp/server.py` is the MCP server: one tool, `run`, no dependencies.
