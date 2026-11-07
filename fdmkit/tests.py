@@ -81,6 +81,7 @@ def selftest():
             App.closeDocument('fdmkit_new_probe')
         App.setActiveDocument(d.Name)
         ck('docs_sync', "?1", lambda r: not _undocumented())
+        ck('dim_math', "?from fdmkit import drawing; drawing._selftest()", lambda r: 'dim_math OK' in r)
         ck('errors', "App.Console.PrintError('fdmkit selftest probe Error\\n')",
            lambda r: True)
         if App.GuiUp:   # the Report view gets the message from Qt's event loop

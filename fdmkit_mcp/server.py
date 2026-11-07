@@ -74,7 +74,13 @@ check(), restore (stress test) | errors() = new errors/tracebacks in FreeCAD's R
 with ' | FreeCAD report: N new errors since the last call' - read errors() and fix the cause | sel() = GUI selection + distance, angle of axes/normals,
 distance of parallel hole axes, diameters; names items 'pad.Face6'/'sk.Edge1', usable as refs |
 reopen() = save, close, open, recompute (clears undo). full() reports lost Assembly joint refs.
-TechDraw: SVG export only (exportPageAsPdf crashes 26.3; untested on 27.1).
+TechDraw: SVG export only (exportPageAsPdf crashes 26.3; untested on 27.1). Dimensions by
+computation, never by looking at exports (rules.md "Dimension placement by computation"):
+dim_add(page, view, name, kind, refs, fmt) = native dimension, refs view coords unscaled Y up
+((x1,y1),(x2,y2)) or (r, x, y) for Diameter/Radius | dim_layout(page, inside=(), sides=None,
+first=10, pitch=7, keepout=(), apply=True) = ISO lanes outside the view, inside labels to the
+nearest clean spot, ends with dim_check | dim_check(page, keepout=()) = label vs labels, edges,
+lines, views, frame, keepout; crossing dimension lines. keepout = title block (x0,y0,x1,y1 page mm).
 CNC (metal, lathe + 4-axis mill, A = part Z; cutter Ø = 2 x params.CncCornerRadius or cutter=):
 cnc(*bodies, skip=('Name',...), cutter=None, holes=False) = sharp inside corners without a floor the
 cutter reaches (stick-out <= 6 Ø), fillets < cutter R, unreachable milled faces, slots < Ø or

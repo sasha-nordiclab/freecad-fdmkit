@@ -280,6 +280,23 @@ Applies when a model is rebuilt from caliper measurements of an original part.
 - The label offsets `X`/`Y` are page millimetres. Hidden-line computation is asynchronous, so read vertices in the next call.
 - Set `KeepUpdated = False` on the pages during stress tests.
 
+### Dimension placement by computation (2026-11-07)
+Never place labels by looking at exports or pictures. Per sheet: refresh the page once; next call
+`dim_add(...)` for each missing dimension (refs in view coordinates, unscaled, Y up); then
+`dim_layout(page, inside=(...), keepout=[title block box])`; it ends with `dim_check`. Export once
+at the end only when the user asks. `dim_layout(..., apply=False)` plans without writing.
+- Frames (probed 27.1): label centre = view.X/Y + dim.X/Y (page mm, Y up); `getArrowPositions()`
+  unscaled, Y up; `getLinearPoints()`/visible vertices/edges scaled, Y DOWN.
+- `Fontsize` is the cap height: label width = QFontMetricsF advance x Fontsize / capHeight.
+- ISO linear label sits ~0.96 x Fontsize above a horizontal / left of a vertical line (read from
+  the page's arrows).
+- Lanes: first line 10 mm off the view outline, then 7 mm apart; shortest span nearest the part;
+  non-overlapping spans share a lane; a label wider than its span goes past the far end; dims go
+  to the side of their measured points, flipped when the label leaves the sheet or hits a view.
+- Keep internal section diameters `inside` only when the outside lane would cross many hatched
+  walls; inside labels move to the nearest spot clear of edges, labels and lines.
+- The title block is template-specific: pass it as `keepout` (x0, y0, x1, y1, page mm, Y up).
+
 ## Animations and exploded views (2026-10-20)
 Proven on the roller stand (`roller-stand/renders/roller_stand_exploded_reel.mp4`, 15 s Reels loop).
 - Tool: i10g (Inbetweening). A step stores the placement, visibility and colour of every `App::Link`/`App::Part`; i10g interpolates linearly between steps and streams `View3D.saveImage` frames of the document's own view into ffmpeg. Joint motion (rotating shafts, lifts) comes from Assembly Simulation instead.

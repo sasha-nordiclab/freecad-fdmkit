@@ -23,7 +23,8 @@ __all__ = ['new', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly'
            'link_array', 'rigid_group', 'snapshot', 'snapshot_restore',
            'undo', 'errors', 'selftest', 'focus', 'full', 'freeze', 'thaw',
            'freeze_all', 'thaw_all', 'i10g_video',
-           'cnc', 'cnc_show', 'cnc_restore', 'cam_job', 'cam_slot', 'cam_sim', 'cam_del']
+           'cnc', 'cnc_show', 'cnc_restore', 'cam_job', 'cam_slot', 'cam_sim', 'cam_del',
+           'dim_add', 'dim_layout', 'dim_check']
 
 V = App.Vector
 C = Sketcher.Constraint
@@ -2258,4 +2259,5 @@ def _tipvol(d):
 from .machining import (CNC_HOLES, CNC_LATHE_MIN_GROOVE, CNC_MAX_DRILL_LD,  # noqa: E402,F401
                         CNC_MAX_MILL_LD, CNC_MAX_REACH_D, CNC_MIN_WALL,
                         cam_del, cam_job, cam_sim, cam_slot, cnc, cnc_restore, cnc_show)
+from .drawing import dim_add, dim_check, dim_layout  # noqa: E402
 from .tests import selftest  # noqa: E402

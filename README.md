@@ -121,6 +121,9 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `case('alias' or 'sheet.alias', value)` | Parametric stress test: set the value, `check()`, restore it (TechDraw pages paused meanwhile) |
 | `cnc(*bodies, skip=(), cutter=None, holes=False)` | CNC check, lathe + 4-axis mill: sharp inside corners without a reachable floor, fillets below the cutter radius, unreachable milled faces, narrow/deep slots, lathe grooves, deep holes, thin walls; `cnc_show()` / `cnc_restore()` paint the faces |
 | `cam_job(name, body, stock, azimuth, cutter)`, `cam_slot(job, p1, p2, depth)`, `cam_sim(job)`, `cam_del(job)` | Native CAM setup per A-axis index, Slot op in part coordinates, CAM_SimulatorGL, CAM teardown |
+| `dim_add(page, view, name, kind, refs, fmt)` | Native TechDraw dimension on view vertices/circles picked by view coordinates (unscaled, Y up); style copied from the page |
+| `dim_layout(page, inside=(), sides=None, first=10, pitch=7, keepout=(), apply=True)` | Places linear dimensions on ISO lanes outside the view (shortest nearest, shared lanes, wide labels past the end), moves conflicting inside labels to the nearest clean spot; computed, no export |
+| `dim_check(page, keepout=())` | Label conflicts (labels, visible edges, dimension/extension lines, other views, frame, keepout) and crossing dimension lines, by computation |
 | `sel()` | The GUI selection (planes, cylinders, circles, vertices) and, for two items, the distance, the angle between their axes or normals and the distance of parallel hole axes |
 | `mass(*objs, density=None)` | Volume, mass (material or `density` in g/cm³), centre of gravity and principal moments |
 | `link_array(source, kind, count, step, axis, angle, path, points, into)` | Part link array (`'linear'`, `'polar'`, `'path'`, `'point'`): App::Link instances that Assembly joints can attach to |
