@@ -28,3 +28,8 @@ One dated line per critical FreeCAD failure met through fdmkit: call, documents,
   the Section View task dialog (GUI edit of an ORWO section view, right after a run() call had renamed page/body
   Labels/Label2 from ORWO828-NN to OptikOldschool-NN). Workaround: none yet; avoid editing section views in the task
   dialog after label renames, set SectionSymbol/Label by Python instead.
+- 2026-11-08: `drawing.dim_add` picks `VertexN` by the index in `getVisibleVertexes()`, but DrawViewDimension
+  References2D `VertexN` uses a different index (ORWO sheet 07 after a geometry change: refs chosen at
+  (-14.4,-5.05)/(-13.71,5.05) measured 8.1 instead of 10.1; inner window edges measured 0). `getLinearPoints()` stays
+  stale until the page recomputes, so mapping by probing in one call fails too. Workaround: rebind by hand in the GUI;
+  fix dim_add to map indices via a page recompute between calls.
