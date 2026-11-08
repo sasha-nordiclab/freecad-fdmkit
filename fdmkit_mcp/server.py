@@ -151,7 +151,12 @@ INSTRUCTIONS = WORKFLOW_POLICY + "\n\n" + """fdmkit rules (full text: skill/rule
    corners sharp; ISO tap drills, ISO 273 clearances; cnc() after each change; show doubts
    with cam_job + cam_slot + cam_sim on the real model.
 18. Local-coordinate migration: Git checkpoint, no file copies; compare assembled geometry
-   both ways, test drivers/joints, reopen/check/lint (cnc for metal)."""
+   both ways, test drivers/joints, reopen/check/lint (cnc for metal).
+19. Critical FreeCAD failures (crash, RPC unreachable, segfault, corrupted/lost save, hang):
+   append one dated line to KNOWN_ISSUES.md in the fdmkit repo (FreeCAD build, call,
+   open documents, symptom, what was lost, workaround); do not commit it unless asked.
+   Save edited documents (doc.save()) before reopen(); after a crash restart FreeCAD,
+   verify what was saved and redo lost edits."""
 
 LOG = os.path.expanduser('~/Library/Logs/fdmkit/mcp.log')
 
