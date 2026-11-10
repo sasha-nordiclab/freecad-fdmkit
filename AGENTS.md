@@ -4,7 +4,7 @@ Global user workflow: one working FCStd per project, history in Git. One small c
 
 These notes cover developing fdmkit itself. For modelling, see `skill/SKILL.md` and `skill/rules.md`.
 
-- Target: FreeCAD 27.1 weekly (2026-10-27 build) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
+- Target: FreeCAD 27.1 weekly (2026-11-04 tag, build 20261103; selftest 122/122) on macOS arm64, which carries the 26.3 features; 26.3 RC2 passed the same selftest before the switch. The API is checked with probes against the running FreeCAD, not from memory.
 - Layout:
   - `fdmkit/__init__.py` is the kit core: helpers, sketches, features, checks, assembly, speed, `run()`.
   - `fdmkit/machining.py` holds the CNC/CAM calls, `fdmkit/drawing.py` the TechDraw dimension calls (`dim_add`, `dim_layout`, `dim_check`; frames and rules in its docstring, probed on ORWO 828 sheet 01), `fdmkit/tests.py` the selftest. They import core helpers with `from . import ...`, so `tools/fc.py --reload` reloads fdmkit, machining, drawing, tests, then fdmkit again.

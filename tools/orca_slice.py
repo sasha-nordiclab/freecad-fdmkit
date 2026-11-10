@@ -6,9 +6,22 @@ usage: orca_slice.py model.stl ["process preset"] [key=value+key=value ...]
 Temporary files go next to the STL and are deleted afterwards.
 """
 import json, os, re, subprocess, sys, pathlib, shutil
-ORCA = '/Applications/OrcaSlicer.app/Contents/MacOS/OrcaSlicer'
+
+def _app():
+    """OrcaSlicer bundle whose system profiles are plain JSON: 2.5.0 packs them into .opc archives
+    that its CLI cannot resolve ("can not resolve preset ... system"). env ORCA_APP overrides."""
+    apps = [os.environ['ORCA_APP']] if os.environ.get('ORCA_APP') else \
+        ['/Applications/OrcaSlicer.app', '/Applications/OrcaSlicer-Debug.app']
+    for a in apps:
+        if (pathlib.Path(a) / 'Contents/Resources/profiles/BBL/machine').is_dir():
+            return a
+    sys.exit('orca_slice: no OrcaSlicer with unpacked BBL profiles; set ORCA_APP')
+
+
+APP = _app()
+ORCA = APP + '/Contents/MacOS/OrcaSlicer'
 USER = pathlib.Path.home() / 'Library/Application Support/OrcaSlicer/user/default'
-SYS = pathlib.Path('/Applications/OrcaSlicer.app/Contents/Resources/profiles/BBL')
+SYS = pathlib.Path(APP) / 'Contents/Resources/profiles/BBL'
 MACHINE = os.environ.get('ORCA_MACHINE', 'Bambu Lab A1 0.4 nozzle - NordicLab')
 FILAMENT = os.environ.get('ORCA_FILAMENT', 'AzureFilm PETG HF White')
 PROCESS = '0.20mm NordicLab 0.6 Ballance'

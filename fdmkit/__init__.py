@@ -236,6 +236,63 @@ class _SheetObserver:
             pass
 
 
+_XLINK_FILE = re.compile(r'(<XLink file=")([^"]+)(")')
+
+
+def _xlink_relative(xml, doc_dir):
+    """Document.xml text with absolute XLink file paths made relative to doc_dir."""
+    from xml.sax.saxutils import escape, unescape
+    ent = {'"': '&quot;'}
+
+    def sub(m):
+        path = unescape(m.group(2), {'&quot;': '"'})
+        if not os.path.isabs(path):
+            return m.group(0)
+        rel = os.path.relpath(os.path.realpath(path), doc_dir)
+        return m.group(1) + escape(rel, ent) + m.group(3)
+    return _XLINK_FILE.sub(sub, xml)
+
+
+def _fix_xlink_paths(fn):
+    """Rewrite absolute XLink paths in a saved FCStd to relative ones; True if it changed."""
+    import zipfile
+    doc_dir = os.path.dirname(os.path.realpath(fn))
+    with zipfile.ZipFile(fn) as z:
+        entries = [(i, z.read(i.filename)) for i in z.infolist()]
+    changed = False
+    out = []
+    for info, data in entries:
+        if info.filename == 'Document.xml':
+            text = data.decode('utf-8')
+            new = _xlink_relative(text, doc_dir)
+            if new != text:
+                changed = True
+                out.append((info, new.encode('utf-8')))
+                continue
+        out.append((info, data))
+    if not changed:
+        return False
+    tmp = fn + '.fdmkit-tmp'
+    with zipfile.ZipFile(tmp, 'w') as z:
+        for info, data in out:
+            z.writestr(info, data, compress_type=info.compress_type)
+    os.replace(tmp, fn)
+    return True
+
+
+class _XLinkObserver:
+    """Work around 27.1 weekly 20261103 (FreeCAD 24ea8589a): PropertyXLink::Save writes the
+    linked document's absolute path, so projects break when moved or cloned. After each
+    save the absolute XLink paths are rewritten relative to the saved file."""
+
+    def slotFinishSaveDocument(self, doc, fn):
+        try:
+            if fn and fn.endswith('.FCStd') and _fix_xlink_paths(fn):
+                App.Console.PrintLog(f'fdmkit: relative XLink paths in {fn}\n')
+        except Exception as e:
+            App.Console.PrintError(f'fdmkit: XLink path fix failed for {fn}: {e}\n')
+
+
 # ---------------------------------------------------------------- document
 def _init(d):
     d.UndoMode = 1
@@ -1792,7 +1849,13 @@ def rigid_group(*parts, name=None):
     if name:
         _free(name)
     j = UtilsAssembly.getJointGroup(asm).newObject('App::FeaturePython', name or 'RigidGroupJoint')
-    JointObject.RigidGroupJoint(j, objs)
+    # 27.1: RigidGroupJoint.__init__ sets ObjectsToRigidGroup before adding RigidPlacements, so its
+    # onChanged raises AttributeError into the report; hold onChanged off until the init is done
+    proxy = JointObject.RigidGroupJoint.__new__(JointObject.RigidGroupJoint)
+    proxy._busy = True
+    proxy.__init__(j, objs)
+    proxy._busy = False
+    proxy.updateStoredPositions(j, True)
     if App.GuiUp and j.ViewObject:
         JointObject.ViewProviderRigidGroupJoint(j.ViewObject)
     _rc(j.Document)
@@ -2236,6 +2299,11 @@ def _boot():
     if old:
         App.removeDocumentObserver(old)
     App._fdmkit_observer = None
+    old = getattr(App, '_fdmkit_xlink_observer', None)
+    if old:
+        App.removeDocumentObserver(old)
+    App._fdmkit_xlink_observer = _XLinkObserver()   # harmless where paths are already relative
+    App.addDocumentObserver(App._fdmkit_xlink_observer)
     if int(App.Version()[0]) < 27:   # 27.1 updates alias dependents (and chains) by itself
         App._fdmkit_observer = _SheetObserver()
         App.addDocumentObserver(App._fdmkit_observer)

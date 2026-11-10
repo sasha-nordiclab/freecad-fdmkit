@@ -17,7 +17,7 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 ## Requirements
 
 - macOS. The paths in `tools/fc.py` and `tools/orca_slice.py` are macOS paths; on Linux or Windows, change them.
-- FreeCAD 26.3 or newer. fdmkit is tested on 26.3 RC1/RC2 and the 27.1 weekly build of 2026-10-27; older versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
+- FreeCAD 26.3 or newer. fdmkit is tested on 26.3 RC1/RC2 and the 27.1 weekly builds of 2026-10-27 and 2026-11-03; older versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
 - The [FreeCAD MCP addon](https://github.com/neka-nat/freecad-mcp) (`FreeCADMCP`), for its XML-RPC server on `127.0.0.1:9875`. fdmkit uses only that RPC server, not the addon's own MCP server.
 - Python 3.10 or newer on the host for the MCP server. It has no dependencies.
 - Optional: OrcaSlicer, for `orca_slice.py`.

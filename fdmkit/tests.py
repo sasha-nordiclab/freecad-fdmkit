@@ -1,5 +1,6 @@
 """fdmkit selftest: builds throwaway parts through run() in hidden documents."""
 import math
+import os
 
 import FreeCAD as App
 import Part
@@ -358,6 +359,8 @@ def selftest():
         finally:
             App.closeDocument(d8.Name)
             App.setActiveDocument(d.Name)
+        res.append(_xlink_check())
+        App.setActiveDocument(d.Name)
     finally:
         App.closeDocument(d.Name)
         if prev and prev in App.listDocuments():
@@ -374,10 +377,45 @@ def selftest():
     return f'selftest {len(res) - len(bad)}/{len(res)}' + (' | ' + ' | '.join(bad) if bad else ' OK')
 
 
+def _xlink_check():
+    """A saved cross-document link must store a relative path (27.1 20261103 writes absolute)."""
+    import re
+    import shutil
+    import tempfile
+    import zipfile
+    tmp = tempfile.mkdtemp(prefix='fdmkit_xlink_')
+    docs = []
+    try:
+        a = App.newDocument('fdmkit_xl_a', 'fdmkit_xl_a', True)
+        docs.append(a.Name)
+        s = a.addObject('Spreadsheet::Sheet', 'params')
+        s.set('B1', '=5 mm')
+        s.setAlias('B1', 'w')
+        a.recompute()
+        a.saveAs(os.path.join(tmp, 'xl_a.FCStd'))
+        b = App.newDocument('fdmkit_xl_b', 'fdmkit_xl_b', True)
+        docs.append(b.Name)
+        b.saveAs(os.path.join(tmp, 'xl_b.FCStd'))
+        t = b.addObject('Spreadsheet::Sheet', 'params')
+        t.set('B1', f'={a.Name}#params.w * 2')
+        b.recompute()
+        b.save()
+        xml = zipfile.ZipFile(b.FileName).read('Document.xml').decode()
+        paths = sorted(set(re.findall(r'XLink file="([^"]+)"', xml)))
+        good = paths == ['xl_a.FCStd'] and abs(t.get('B1').Value - 10) < 1e-9
+        return ('xlink_relative', good, f'XLink paths {paths}')
+    except Exception as e:
+        return ('xlink_relative', False, f'ERR {e}')
+    finally:
+        for n in reversed(docs):
+            if n in App.listDocuments():
+                App.closeDocument(n)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _undocumented():
     """Public calls missing from the MCP tool description or the README API table."""
     import fdmkit
-    import os
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     srv = open(os.path.join(root, 'fdmkit_mcp', 'server.py'), encoding='utf-8').read()
     readme = open(os.path.join(root, 'README.md'), encoding='utf-8').read()
