@@ -2,7 +2,7 @@
 
 The reference implementation is the THD CP-Lift holder: `Jobo_CPE2_Bottle_Hanger/scripts/fem/`.
 
-## Tools (all bundled with FreeCAD 26.3)
+## Tools (all bundled with FreeCAD 27.1)
 - Mesh: `…/FreeCAD.app/Contents/Resources/bin/gmsh part.step -3 -order 2 -setnumber Mesh.SecondOrderLinear 1 -clmax 2.5 -clmin 1.0 -format inp`.
   - Without `SecondOrderLinear 1`, curved C3D10 elements fail with "nonpositive jacobian".
 - Solve: `…/bin/ccx`, linear static, one STEP per load case.

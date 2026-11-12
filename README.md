@@ -17,14 +17,14 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 ## Requirements
 
 - macOS. The paths in `tools/fc.py` and `tools/orca_slice.py` are macOS paths; on Linux or Windows, change them.
-- FreeCAD 26.3 or newer. fdmkit is tested on 26.3 RC1/RC2 and the 27.1 weekly builds of 2026-10-27 and 2026-11-03; older versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
+- FreeCAD 27.1 weekly, build 20261103 (2026-11-03). fdmkit targets only this build; other versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
 - The [FreeCAD MCP addon](https://github.com/neka-nat/freecad-mcp) (`FreeCADMCP`), for its XML-RPC server on `127.0.0.1:9875`. fdmkit uses only that RPC server, not the addon's own MCP server.
 - Python 3.10 or newer on the host for the MCP server. It has no dependencies.
-- Optional: OrcaSlicer, for `orca_slice.py`.
+- Optional: OrcaSlicer 2.5 or newer, for `orca_slice.py`.
 
 ## Install
 
-1. Clone the repository and link it into FreeCAD's `Mod` folder. The folder name depends on the FreeCAD version: `v26-3` for 26.3, `v27-1` for the 27.1 weekly builds:
+1. Clone the repository and link it into FreeCAD's `Mod` folder. The folder name for FreeCAD 27.1 is `v27-1`:
 
    ```sh
    git clone https://github.com/sasha-nordiclab/freecad-fdmkit.git fdmkit
@@ -95,7 +95,7 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `poly(sk, [(x, y), ...])` | Closed polygon |
 | `fil(sk, (x, y), r)` | Sketch fillet at the corner nearest to the point |
 | `half(sk)` | Keep the upper half of a symmetric sketch, close along its horizontal axis and preserve driving dimensions |
-| `regions(sk)` | Closed regions of a sketch (26.3 internal faces): name, area, an inner point for `at=`, holes |
+| `regions(sk)` | Closed regions of a sketch (internal faces): name, area, an inner point for `at=`, holes |
 | `remap(feature, *at)` | Point a Pad/Pocket at the regions under the given sketch points again after a sketch edit lost them; no points = whole sketch |
 | `pad(sk, len, side='one', reverse=False, start='profile', offset=0, reference=None, at=None, length2=None)` | Pad; `side` is `'one'`, `'two'` (needs `length2`) or `'sym'`; `at=(x, y)` or a list pads only the sketch regions under those points |
 | `pocket(sk, depth='through', side='one', reverse=False, start='profile', offset=0, reference=None, operation='subtract', at=None, depth2=None)` | Pocket; `operation='common'` keeps the intersection; `at=` as for `pad` ; `side='two'` needs `depth2` |
@@ -136,15 +136,17 @@ Lengths and angles take a number, a parameter name or an expression such as `'wa
 
 A call that starts with `?` is read-only: no transaction, no recompute, no autosave. Both kinds of call see the functions above plus `App` and `Gui`; import other modules inside the call.
 
-For the 26.3 start modes, use `start='offset', offset='wall'` or `start='reference', reference='top_plane'`. Start references must be origin or datum planes or a sketch region `(sk, (x, y))`; the offset runs along the feature (a pocket's into its cut); `up_to`, paths and faces also take `'Feature.Face3'` / `'sketch.Edge1'`, as `sel()` prints them. Every pattern call makes the pattern the Body Tip and fails if the pattern changes nothing. `hole` accepts FreeCAD thread type and size names reported by that build; a cosmetic thread is metadata/visualization and does not appear as helical STL geometry. `polar` counts the original as one occurrence. Unsupported 26.3 properties fail with a clear error instead of silently changing the model.
+For the start modes, use `start='offset', offset='wall'` or `start='reference', reference='top_plane'`. Start references must be origin or datum planes or a sketch region `(sk, (x, y))`; the offset runs along the feature (a pocket's into its cut); `up_to`, paths and faces also take `'Feature.Face3'` / `'sketch.Edge1'`, as `sel()` prints them. Every pattern call makes the pattern the Body Tip and fails if the pattern changes nothing. `hole` accepts FreeCAD thread type and size names reported by that build; a cosmetic thread is metadata/visualization and does not appear as helical STL geometry. `polar` counts the original as one occurrence. Unsupported properties fail with a clear error instead of silently changing the model.
 
 ## Security
 
 fdmkit runs code in FreeCAD through the addon's XML-RPC server, and the copy it was developed with has no token. Any program on the same computer that can reach `127.0.0.1:9875` can run arbitrary Python inside FreeCAD. Keep the addon's **Remote Connections** setting off, so that the server stays on localhost.
 
-## Known FreeCAD 26.3/27.1 issues it works around
+## Known FreeCAD 27.1 issues it works around
 
-- Changing a spreadsheet cell that is referenced by its alias does not update the model. fdmkit installs a document observer that marks the sheet's dependents as changed.
+- Deleting an object whose expressions use a spreadsheet alias makes the next sheet change segfault (FreeCAD #33685, still on build 20261103): clear the expressions and recompute first.
+- `Body.newObject()` of a pattern leaves the Tip behind (#34054), and a Thickness/Defeaturing on an earlier feature drops the later ones (#34055): the kit sets the Tip itself and accepts only Tip faces.
+- `TechDrawGui.exportPageAsPdf` crashes FreeCAD (#33798); `run()` refuses it, export SVG.
 - With a decimal-comma locale, numbers written to the spreadsheet are stored as formulas (`'=40.5'`).
 - Link view providers have `ShapeAppearance` instead of `ShapeMaterial`, which breaks the Inbetweening (i10g) animation workbench. Apply `tools/patches/i10g-shapeappearance.patch` in its `Mod/Inbetweening` folder (`patch -p1 < ...`); `i10g_video()` checks for it.
 - FreeCAD rejects unit names (`h`, `m`, `s`, `g`, `l`, `t`, `mm`, `deg`, `in`, ...) as aliases, so parameters cannot be called that.

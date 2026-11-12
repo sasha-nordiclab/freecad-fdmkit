@@ -15,7 +15,7 @@ import FreeCAD as App
 import Part
 import Sketcher
 
-__version__ = '0.4.0'
+__version__ = '0.5.0'
 __all__ = ['new', 'body', 'help', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
            'half', 'regions', 'remap', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'linear', 'polar', 'circular',
            'path_pattern', 'point_pattern', 'mirror', 'move', 'defeature', 'thickness',
