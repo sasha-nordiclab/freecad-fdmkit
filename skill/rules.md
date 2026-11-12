@@ -7,6 +7,17 @@
 - Use in-memory geometry or a read-only Git baseline for comparisons. If a project lacks Git, initialize it and checkpoint the existing model before editing; preserve unrelated user changes.
 - Temporary files required by a specific check belong in scratchpad and are cleaned up afterwards; reuse an existing checker/report rather than create another per step. Respect the user's limits on slicing, FEM and time.
 
+## Token economy (user rule, 2026-11-12)
+- Roles: the main session plans, writes the brief and reviews the numbers; one mid-tier subagent (Claude: sonnet) per edit batch runs the calls. Effort medium; high for Assembly joints, cross-document params and check scripts. Never the smallest tier (haiku: results unusable), never a separate read-only inspection agent; a single short read goes from the main session.
+- Brief: document, exact change, acceptance numbers, stop conditions. Point to files and sections instead of retyping them.
+- Read only what the task needs: the AGENTS.md entry of the edited document and the named rules.md section, each once. Trust "Verified state"; re-measure only what the change touches.
+- Calls: one `run()` per batch of related edits; `?expr` reads that return only the needed numbers; no `tree()` or whole-document dumps unless diagnosing an ERR.
+- Checks: a light check of the touched Bodies between steps; the full cold-open, `check()`, `lint()`, `case()` once before the commit.
+- Stop at the first unexpected error and report it; do not explore, and do not repeat a failing call more than once.
+- No screenshots or exports unless asked: the user watches the GUI.
+- Reports: params old -> new, objects added/removed, the measured numbers, warnings split into new and pre-existing. No narrative; a table only for requested measurements.
+- When the user asks for these rules, state them in the chat as well.
+
 ## Standard FreeCAD solutions first
 - Before designing a component or mechanism, check native FreeCAD features, installed workbenches, standard parts, and manufacturer CAD for a suitable solution. Check purchased hardware such as bearings, fasteners, gears, and pulleys before drawing substitutes.
 - Prefer a standard component when its dimensions, interfaces, and required adjustability fit the design. Resize through supported parameters, verify the dimensions and source, and record the choice in the project handoff.
