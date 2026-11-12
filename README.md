@@ -151,6 +151,10 @@ fdmkit runs code in FreeCAD through the addon's XML-RPC server, and the copy it 
 - Link view providers have `ShapeAppearance` instead of `ShapeMaterial`, which breaks the Inbetweening (i10g) animation workbench. Apply `tools/patches/i10g-shapeappearance.patch` in its `Mod/Inbetweening` folder (`patch -p1 < ...`); `i10g_video()` checks for it.
 - FreeCAD rejects unit names (`h`, `m`, `s`, `g`, `l`, `t`, `mm`, `deg`, `in`, ...) as aliases, so parameters cannot be called that.
 
+## Support
+
+If fdmkit is useful to you and you want to support the project, you can donate at [ko-fi.com/nordiclab](https://ko-fi.com/nordiclab).
+
 ## License
 
 [CC BY-NC-SA 4.0](LICENSE): free to use, change and share for non-commercial purposes, with attribution, under the same license.
