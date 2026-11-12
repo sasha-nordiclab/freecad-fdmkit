@@ -83,6 +83,8 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | Call | Does |
 |---|---|
 | `new(name)` | New document with a Body and a `params` sheet |
+| `body(name)` | New Body in the open document, made the active Body of its 3D views (without a 3D view helpers use the last Body); an existing name is an ERR |
+| `help(topic=None)` | Reference text of rarely used calls: `help()` lists the topics (starts regions patterns dressup hole assembly anim drawing cnc cam), `help('cam')` gives one; works as `?help('cam')` |
 | `P(name=val, ...)` / `P()` | Set parameters / list them |
 | `plane(name, base='XY', offset=0)` | Datum plane on an origin plane or on another datum |
 | `midplane(name, a, b)` | Datum plane midway between two planes or faces (bisector if they are not parallel) |

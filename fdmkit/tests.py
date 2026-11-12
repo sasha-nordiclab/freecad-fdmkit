@@ -5,7 +5,7 @@ import os
 import FreeCAD as App
 import Part
 
-from . import PARAMS, V, _aliases, _body, _init, _ref, _sk_issue, _tipvol, run  # noqa: F401
+from . import _HELP, PARAMS, V, _aliases, _body, _init, _ref, _sk_issue, _tipvol, run  # noqa: F401
 
 
 def selftest():
@@ -34,6 +34,12 @@ def selftest():
     try:
         ck('P', "P(width=40, depth=20, height=5, r_c=3)", ok)
         ck('P_reserved', "P(h=1)", lambda r: r.startswith('ERR') and 'h' not in _aliases(d.getObject(PARAMS)))
+        ck('help', "?help()", lambda r: all(f'{t}: ' in r for t in _HELP) and 'cam_job' in r)
+        ck('help_topic', "?help('cam')", lambda r: 'cam_job' in r and 'cam_slot' in r)
+        ck('help_unknown', "?help('nosuch')", lambda r: 'ERR' in r and 'cam:' in r)
+        ck('body', "body('Extra')", lambda r: r.startswith('Extra: OK') and _body(d).Name == 'Extra')
+        ck('body_exists', "body('Extra')", lambda r: r.startswith('ERR'))
+        d.removeObject('Extra')
         ck('plane', "plane('base', 'XY')", ok)
         ck('sk', "sk('outline', 'base')", ok)
         ck('rect', "rect('outline', 'width', 'depth')", dof0)
@@ -360,6 +366,10 @@ def selftest():
             App.closeDocument(d8.Name)
             App.setActiveDocument(d.Name)
         res.append(_xlink_check())
+        desc, ins = _server_texts()
+        n = len(ins.encode())   # Claude Code cuts server instructions at 4096; bytes are the safe measure
+        res.append(('instructions_len', n <= 4096, f'INSTRUCTIONS {n} bytes, max 4096'))
+        res.append(('description_len', len(desc) <= 6000, f'DESCRIPTION {len(desc)} chars, max 6000'))
         App.setActiveDocument(d.Name)
     finally:
         App.closeDocument(d.Name)
@@ -413,11 +423,32 @@ def _xlink_check():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _server_texts():
+    """DESCRIPTION and INSTRUCTIONS of fdmkit_mcp/server.py, parsed without importing it."""
+    import ast
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, 'fdmkit_mcp', 'server.py')
+    tree = ast.parse(open(path, encoding='utf-8').read())
+    env, out = {}, {}
+    for n in tree.body:
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+            try:
+                env[n.targets[0].id] = eval(compile(ast.Expression(n.value), path, 'eval'), {}, dict(env))
+            except Exception:
+                pass
+    for k in ('DESCRIPTION', 'INSTRUCTIONS'):
+        out[k] = env.get(k, '')
+    return out['DESCRIPTION'], out['INSTRUCTIONS']
+
+
 def _undocumented():
-    """Public calls missing from the MCP tool description or the README API table."""
+    """Public calls missing from the MCP description (name there, signature there or in help()) or the README."""
+    import re
+
     import fdmkit
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    srv = open(os.path.join(root, 'fdmkit_mcp', 'server.py'), encoding='utf-8').read()
+    desc = _server_texts()[0]
+    sig = desc + '\n' + '\n'.join(fdmkit._HELP.values())
     readme = open(os.path.join(root, 'README.md'), encoding='utf-8').read()
-    import re
-    return [n for n in fdmkit.__all__ if not re.search(rf'\b{n}\b', srv) or f'`{n}(' not in readme]
+    return [n for n in fdmkit.__all__ if not re.search(rf'\b{n}\b', desc)
+            or not re.search(rf'\b{n}\(', sig) or f'`{n}(' not in readme]

@@ -16,7 +16,7 @@ import Part
 import Sketcher
 
 __version__ = '0.4.0'
-__all__ = ['new', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
+__all__ = ['new', 'body', 'help', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
            'half', 'regions', 'remap', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'linear', 'polar', 'circular',
            'path_pattern', 'point_pattern', 'mirror', 'move', 'defeature', 'thickness',
            'dim', 'chk', 'why', 'tree', 'check', 'lint', 'case', 'sel', 'mass', 'reopen',
@@ -278,6 +278,92 @@ class _XLinkObserver:
             App.Console.PrintError(f'fdmkit: XLink path fix failed for {fn}: {e}\n')
 
 
+# ---------------------------------------------------------------- help
+_HELP = {
+    'starts': """26.3 starts: pad/pocket/revolve/groove(...,start='profile'|'offset'|'reference',
+offset=expr (revolve/groove: deg),reference='XY'|datum|(sk,(x,y))); pocket/groove/hole(...,operation='subtract'|'common')
+Offset runs along the feature: pad +normal, pocket into the cut (pocket offset=-6 starts 6 above).
+revolve/groove(...,project_axis=True (axis outside the sketch plane), type='angle'|'up_to_face'|
+'up_to_first'|'up_to_last'(revolve)|'through'(groove), up_to=plane|'Feature.FaceN')
+midplane(name,a,b) datum midway between two planes/faces (bisector if not parallel)""",
+    'regions': """Sketch regions (26.3 internals): pad/pocket(...,at=(x,y)|[(x,y),...]) use only the closed
+regions under those sketch-coord points, so one master sketch drives several features;
+regions(sk) lists InternalFaceN, area, an inner point, holes. Pick by point, never by N.
+After a sketch edit lint() reports 'lost ?InternalFaceN' (the feature keeps a stale
+shape); remap(feature,(x,y),...) re-picks the regions, remap(feature) = whole sketch.""",
+    'patterns': """linear(features,'X'|'Feature.EdgeN',count,step=|extent=,direction2=,count2=1,suppressed=[i|(i,j)])
+one feature for a row or a grid (2x2 mount holes); step2/extent2 default to step/extent
+polar(features,occurrences,axis='Z',angle=360,suppressed=()) indices are zero-based
+circular(features,rings,radial,tangential,axis='Z',symmetry=1) concentric circles |
+path_pattern(features,path,count=None,spacing=None,align=False) first instance = original |
+point_pattern(features,points) at a sketch's points/circle centres or 'Feature.VertexN'; first = original.
+Every pattern becomes the Body Tip; a pattern that changes nothing is an ERR.""",
+    'dressup': """defeature(['Tip.Face7',...]) removes faces of the Body Tip and heals | thickness(faces,value,
+mode='skin'|'recto_verso',join='arc'|'intersection',inward=True) shell; fails on complex solids""",
+    'hole': """hole(sk,diameter,depth='through',thread_type=None,thread_size=None,model_thread=False,
+cosmetic_thread=True,drill_point='flat'|'angled') blind floor flat at depth ('angled' adds a cone
+below it); threaded: diameter = nominal (4 -> M4x0.7, tap drill set)""",
+    'assembly': """link_array(source,'linear'|'polar'|'path'|'point',count,step,axis,angle,path,
+points,into=assembly) = App::Link instances, joints attach to any | rigid_group(*links) joint |
+snapshot(name) store/re-capture placements+visibility | snapshot_restore(name,solve=True)
+mass(*objs,density=g/cm³) = V, m, CoG, principal I (materials' density unless 'Default')
+LOCAL COORDINATES: for local source Bodies, check(*assembly_link_names) / case(name, value, *assembly_link_names)
+check the assembled parts; plain check() would compare Bodies overlapping at their origins.
+Migration procedure: skill/rules.md "Local part coordinates and assembly placement".""",
+    'anim': """freeze_all() / thaw_all() = every non-link object (animations); then full().
+i10g_video() = render the i10g Animation async (hidden links dropped); wait for ffmpeg.""",
+    'drawing': """TechDraw: SVG export only (exportPageAsPdf crashes FreeCAD). Dimensions by
+computation, never by looking at exports (rules.md "Dimension placement by computation"):
+dim_add(page, view, name, kind, refs, fmt) = native dimension, refs view coords unscaled Y up
+((x1,y1),(x2,y2)) or (r, x, y) for Diameter/Radius | dim_layout(page, inside=(), sides=None,
+first=10, pitch=7, keepout=(), apply=True) = ISO lanes outside the view, inside labels to the
+nearest clean spot, ends with dim_check | dim_check(page, keepout=()) = label vs labels, edges,
+lines, views, frame, keepout; crossing dimension lines. keepout = title block (x0,y0,x1,y1 page mm).
+Not in the run() namespace; import inside the call: from fdmkit import drawing; drawing.<call>(...)
+drawing.view_layout(page, keepout=(), maxgap=25, attach=12, pad=1.5, apply=True) = place the part
+views near the centre of the free field (frame minus title block, notes, keepout), equal gaps,
+projection alignment kept; ends with dim_check; refresh the page one call before |
+drawing.title_block(page, fields=6.2) = title block box (x0,y0,x1,y1 page mm, Y up) read from the
+template SVG, None without texts |
+drawing.sheet_fit(page, keepout=(), margin=0.5, max_shift=15, step=0.5, ppm=5, apply=True) = exact
+ink check of the exported drawing against frame, title block, keepout; searches the smallest rigid
+shift that clears them (apply moves all views); call page_sync one call before |
+drawing.page_sync(page) = KeepUpdated on, dimensions/annotations/balloons touched, page recomputed;
+call sheet_fit or export in the NEXT call, restore KeepUpdated=False yourself |
+drawing.ink(page, ppm=5) = exact ink of the exported page (temp SVG, template stripped) as a numpy
+bool array, row 0 = top; run page_sync one call before.""",
+    'cnc': """CNC (metal, lathe + 4-axis mill, A = part Z; cutter Ø = 2 x params.CncCornerRadius or cutter=):
+cnc(*bodies, skip=('Name',...), cutter=None, holes=False) = sharp inside corners without a floor the
+cutter reaches (stick-out <= 6 Ø), fillets < cutter R, unreachable milled faces, slots < Ø or
+deeper than 4 x width, lathe grooves < 0.5, holes L/D > 8, walls < 0.3; holes=True lists tap
+drill / ISO 273 sizes | cnc_show() / cnc_restore() = faces of the last cnc() red / colours back.""",
+    'cam': """CAM (native workbench): cam_job(name, body, stock=feature_before, azimuth=deg, cutter=Ø) =
+one setup; azimuth = A-axis index (model + stock clones turned so that radial is +Z, the
+simulator is 3-axis); name gets a 'Job' prefix | cam_slot(job, p1, p2, depth) = Slot op,
+points in PART coordinates on the top surface | cam_sim(job) = CAM_SimulatorGL tab, Play
+| cam_del(job) = CAM's own teardown.""",
+}
+
+
+def _topics():
+    """'topic: call, call; ...' for every help topic."""
+    out = []
+    for t, x in _HELP.items():
+        c = [n for n in dict.fromkeys(re.findall(r'([a-z_0-9]+)(?=[(/])', x)) if n in __all__]
+        c += [f'drawing.{n}' for n in dict.fromkeys(re.findall(r'drawing\.(\w+)\(', x))]
+        out.append(f"{t}: {', '.join(c)}")
+    return '; '.join(out)
+
+
+def help(topic=None):
+    """Reference text of rarely used calls: help() lists the topics, help('cam') gives one."""
+    if topic is None:
+        return 'help topics: ' + _topics()
+    if topic not in _HELP:
+        raise FdmkitError(f'help: unknown topic {topic!r}; topics: {_topics()}')
+    return _HELP[topic]
+
+
 # ---------------------------------------------------------------- document
 def _init(d):
     d.UndoMode = 1
@@ -297,6 +383,26 @@ def new(name='Part', hidden=False):
         except Exception:
             pass
     return f'{d.Name}: OK'
+
+
+def body(name):
+    """New PartDesign Body in the open document, made the active Body of its 3D views."""
+    _free(name)
+    d = _doc()
+    b = d.addObject('PartDesign::Body', name)
+    d.recompute()
+    n = 0
+    if App.GuiUp:
+        import FreeCADGui as Gui
+        gd = Gui.getDocument(d.Name)
+        views = list(gd.mdiViewsOfType('Gui::View3DInventor')) if gd else []
+        for v in views:       # the front tab may be a sheet or a CAM simulator: set it in every 3D view
+            try:
+                v.setActiveObject('pdbody', b)
+                n += 1
+            except Exception:
+                pass
+    return f'{name}: OK' + ('' if n else ' (no 3D view: helpers use the last Body)')
 
 
 def plane(name, base='XY', offset=0):
