@@ -120,6 +120,11 @@ Fix the print orientation before modelling and keep "model axis → print Z" in 
 - TPU: flexible parts. Slow print; add clearance +0.1.
 - ASA/ABS: the A1 is open, so they warp. Avoid long flat parts and sharp corners on the bed, and use a brim. Flag this to the user.
 
+## Avoid known FreeCAD failures
+- Before CAD work, read `../KNOWN_ISSUES.md` and apply documented workarounds before issuing calls. Never repeat a known crash path.
+- Never `reopen()` a linked source with dependent documents open. Save changes, close dependents before sources, then cold-open the root assembly and its complete dependency graph. Use `reopen()` only on a standalone document without open dependents.
+- 2026-11-10: User requires known failures to be actively avoided; logging a repeated failure is not a substitute for applying its workaround.
+
 ## Before changing anything: understand the part in use
 - Ask how it is installed and what touches it before you redesign.
   - How it hangs or mounts.
