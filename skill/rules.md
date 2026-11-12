@@ -211,7 +211,7 @@ Source: MangoJelly "FreeCAD 26.3 Sketch Internals" (2026-10-31), probed on the 2
 - Migrating: Git-checkpoint the model, retain baseline geometry for comparison, and edit the same working file. Preserve native features where practical; if replacing a Body, compare assembled geometry before swapping references. Clear expressions and recompute before deleting the old object; never delete the baseline merely to reuse its Name. See "Local part coordinates and assembly placement".
 - Test the parametrisation: set several smaller and larger sizes in a transaction, check one valid solid, holes clear, `chk()` and that the bbox equals the derived length, then abort.
 - API traps:
-  - **Deleting objects that use the sheet crashes FreeCAD 26.3 (RC1 and RC2).** If an object with expressions referencing `params` (feature, sketch, datum, link or whole Body) is deleted, the next change of a sheet cell segfaults in `Document::recompute` → `DocumentObject::enforceRecompute`, even when a recompute ran in between and even when the whole Body is deleted. Reproduced without fdmkit and without addons (2026-10-18). Workaround that works: clear every expression of the objects to be deleted (`for p, e in list(o.ExpressionEngine): o.setExpression(p, None)`), recompute, then delete. To rebuild a part, build it in a new Body, relink the users, clear the old Body's expressions, then delete it.
+  - **Deleting objects that use the sheet crashes FreeCAD (26.3 and 27.1 build 20261103, #33685).** If an object with expressions referencing `params` (feature, sketch, datum, link or whole Body) is deleted, the next change of a sheet cell segfaults in `Document::recompute` → `DocumentObject::enforceRecompute`, even when a recompute ran in between and even when the whole Body is deleted. Reproduced without fdmkit and without addons (2026-10-18). Workaround that works: clear every expression of the objects to be deleted (`for p, e in list(o.ExpressionEngine): o.setExpression(p, None)`), recompute, then delete. To rebuild a part, build it in a new Body, relink the users, clear the old Body's expressions, then delete it.
   - A Body's `BaseFeature` taken from another Body uses that Body's global placement and is not recomputed when the source moves through expressions (it went stale and collided). Build the variant as its own Body from the same params instead.
   - `Spreadsheet.removeRows()` shifts the cells but leaves stale computed values: dependent cells and features then recompute with old numbers (seen 2026-10-18: `drum_y0` −168.8 instead of −138). After removing or inserting rows, touch every used cell (`sheet.touchCells(c)`), `sheet.recompute()`, `doc.recompute()`, and re-read a few derived values before saving.
   - `Spreadsheet.clearAll()` is not undone by `abortTransaction`; rewrite and clear cells one by one.
@@ -239,7 +239,7 @@ Source: official release notes 26.3 and the 27.1 weekly changes; each call is pr
 - Recompute: `EnableAsyncRecompute` (26.3, on by default) only affects GUI commands; `fdmkit.run` recomputes synchronously. After `Gui.runCommand(...)` wait and re-read the state before using the result.
 - PartDesign Boolean tool bodies keep their own placement (26.3): no resetting to the origin before a Boolean.
 - GUI-only, no fdmkit call: Sketcher dimension tools pick model edges directly (auto external geometry), broken external geometry is flagged in the tree, vertical spreadsheet configuration tables, several documents editable at once with separate undo, experimental fine-grained recompute (a preference; leave off).
-- 27.1 weekly fix: spreadsheet values keep their precision after save/reopen (PR #32464); sheet-expression delete segfault, `exportPageAsPdf` crash and chamfer hangs are untested on 27.1 — keep the workarounds.
+- 27.1 weekly fix: spreadsheet values keep their precision after save/reopen (PR #32464); the sheet-expression delete segfault still reproduces on build 20261103 (#33685); the `exportPageAsPdf` crash and chamfer hangs are not re-tested — keep the workarounds.
 
 ## Lightening: recesses and thin walls before windows
 - Through windows in thin walls cost print time: each one adds perimeters and travel. Measured on a 3 mm wall: windows −14 g but +26 min against solid walls.
@@ -290,7 +290,7 @@ Applies when a model is rebuilt from caliper measurements of an original part.
 - Clamped parts get clearance holes and the threaded part gets a tapped hole. A screw that threads into both parts cannot clamp them.
 
 ## TechDraw drawings (2026-10-24)
-- Export pages with `TechDrawGui.exportPageAsSvg` only; `exportPageAsPdf` crashed FreeCAD 26.3 and `run()` refuses it.
+- Export pages with `TechDrawGui.exportPageAsSvg` only; `exportPageAsPdf` crashes FreeCAD (#33798) and `run()` refuses it.
 - A dimension that should show a label instead of the value: `Arbitrary = True`, `FormatSpec = 'D7'`; `getRawValue()` still returns the model value.
 - Dimensions reference view vertices by index. Find them by coordinates: DrawViewPart vertices are centred on the view's bounding-box centre, DrawViewSection vertices are in model coordinates. Re-bind them after a geometry change.
 - The label offsets `X`/`Y` are page millimetres. Hidden-line computation is asynchronous, so read vertices in the next call.

@@ -74,7 +74,7 @@ check(), restore (stress test) | errors() = new errors/tracebacks in FreeCAD's R
 with ' | FreeCAD report: N new errors since the last call' - read errors() and fix the cause | sel() = GUI selection + distance, angle of axes/normals,
 distance of parallel hole axes, diameters; names items 'pad.Face6'/'sk.Edge1', usable as refs |
 reopen() = save, close, open, recompute (clears undo). full() reports lost Assembly joint refs.
-TechDraw: SVG export only (exportPageAsPdf crashes 26.3; untested on 27.1). Dimensions by
+TechDraw: SVG export only (exportPageAsPdf crashes FreeCAD). Dimensions by
 computation, never by looking at exports (rules.md "Dimension placement by computation"):
 dim_add(page, view, name, kind, refs, fmt) = native dimension, refs view coords unscaled Y up
 ((x1,y1),(x2,y2)) or (r, x, y) for Diameter/Radius | dim_layout(page, inside=(), sides=None,
@@ -135,7 +135,7 @@ INSTRUCTIONS = WORKFLOW_POLICY + "\n\n" + """fdmkit rules (full text: skill/rule
    main drivers. reopen() clears the undo history.
 11. Before deleting an object whose expressions use the params sheet, clear them
    (setExpression(p, None) for each ExpressionEngine entry) and recompute: else the next
-   sheet change segfaults FreeCAD 26.3 (untested on 27.1).
+   sheet change segfaults FreeCAD (27.1 too).
 12. Speed (rules.md "Speed with big documents"): focus() the edited Bodies, freeze() the
    Assembly and heavy parts, '?expr' reads, one batch per edit, Suppressed not delete,
    one full() at the end. Never call while FreeCAD is still busy.

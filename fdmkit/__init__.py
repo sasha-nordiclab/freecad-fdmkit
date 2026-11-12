@@ -1,4 +1,4 @@
-"""fdmkit: lean parametric PartDesign helpers for FDM and CNC (FreeCAD 26.3, 27.1).
+"""fdmkit: lean parametric PartDesign helpers for FDM and CNC (FreeCAD 27.1).
 
 Entry point is run(expr): one call = one transaction, result = one line.
 Lengths and angles take a number or an expression; bare names of params
@@ -219,21 +219,6 @@ def _pval(s, k):
         return _num(s.get(k))
     except Exception:       # text or an error value in the cell
         return repr(str(s.get(k)))
-
-
-class _SheetObserver:
-    """Work around 26.3: changing an aliased cell does not touch dependents. Installed only
-    before 27.1, where it made every P() recompute every sheet-dependent object."""
-
-    def slotChangedObject(self, obj, prop):
-        try:
-            if obj.TypeId != 'Spreadsheet::Sheet' or obj.Document.Restoring:
-                return
-            for o in obj.InList:
-                if 'Touched' not in o.State:
-                    o.touch()
-        except Exception:
-            pass
 
 
 _XLINK_FILE = re.compile(r'(<XLink file=")([^"]+)(")')
@@ -2232,7 +2217,7 @@ def run(expr):
 
 def _run(expr):
     if 'exportPageAsPdf' in expr:
-        return 'ERR exportPageAsPdf crashes FreeCAD 26.3; use TechDrawGui.exportPageAsSvg'
+        return 'ERR exportPageAsPdf crashes FreeCAD (#33798); use TechDrawGui.exportPageAsSvg'
     try:
         ast.parse(expr[1:].strip() if expr.startswith('?') else expr)
     except SyntaxError as e:
@@ -2295,18 +2280,11 @@ def _line(s):
 
 
 def _boot():
-    old = getattr(App, '_fdmkit_observer', None)
-    if old:
-        App.removeDocumentObserver(old)
-    App._fdmkit_observer = None
     old = getattr(App, '_fdmkit_xlink_observer', None)
     if old:
         App.removeDocumentObserver(old)
     App._fdmkit_xlink_observer = _XLinkObserver()   # harmless where paths are already relative
     App.addDocumentObserver(App._fdmkit_xlink_observer)
-    if int(App.Version()[0]) < 27:   # 27.1 updates alias dependents (and chains) by itself
-        App._fdmkit_observer = _SheetObserver()
-        App.addDocumentObserver(App._fdmkit_observer)
     v = App.Version()
     ver = f'{v[0]}.{v[1]}.{v[2]} {v[3].split()[0]}'
     p = App.ParamGet(_PREF)
