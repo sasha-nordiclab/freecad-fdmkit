@@ -155,6 +155,8 @@ fdmkit runs code in FreeCAD through the addon's XML-RPC server, and the copy it 
 
 If fdmkit is useful to you and you want to support the project, you can donate at [ko-fi.com/nordiclab](https://ko-fi.com/nordiclab).
 
+[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/nordiclab)
+
 ## License
 
 [CC BY-NC-SA 4.0](LICENSE): free to use, change and share for non-commercial purposes, with attribution, under the same license.
