@@ -122,8 +122,11 @@ INSTRUCTIONS = WORKFLOW_POLICY + "\n\n" + """fdmkit rules (full text: skill/rule
 7. Time/grams: tools/orca_slice.py with the user's presets (A1 NordicLab, 0.20mm NordicLab
    0.6 Ballance, AzureFilm PETG HF); strength parts 100 % zig-zag.
 8. Reply OK / errors / numbers. No exports unless asked; temp files in scratchpad.
-   Use as few subagents as possible: call run() from the main session; at most one
-   subagent per edit batch, never a separate read-only inspection agent.
+   Executor: the main session plans, briefs (document, exact change, acceptance numbers)
+   and reviews; one mid-tier subagent (Claude: sonnet) per edit batch runs the calls,
+   effort medium, high for Assembly joints, cross-document params or check scripts.
+   Never the smallest tier (haiku), never a separate read-only inspection agent; single
+   short reads go from the main session.
 9. Keep the project AGENTS.md minimal (about 60-70 lines) so a new session starts cheap:
    FreeCAD version, rules, one line per model file, latest verified state, decisions, open
    questions. Details live in the params sheets and in Git history; no session logs or
