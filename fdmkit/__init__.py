@@ -1561,8 +1561,19 @@ def _line_dist(p, c, n):
 
 
 def _off_axis(d, bodies):
-    """Fasteners whose axis runs through no cylindrical face of the given Bodies."""
-    cyl = [(f.Surface.Axis, f.Surface.Center) for b in bodies for f in b.Shape.Faces
+    """Fasteners whose axis runs through no cylindrical face of the given Bodies or of the
+    document's App::Link instances (assembly parts live in other documents)."""
+    shapes = [b.Shape for b in bodies]
+    for o in d.Objects:
+        if o.TypeId == 'App::Link' and o not in bodies:
+            s = getattr(o, 'Shape', None)
+            if s is None or s.isNull():
+                continue
+            s = s.copy()
+            if hasattr(o, 'getGlobalPlacement'):
+                s.Placement = o.getGlobalPlacement()
+            shapes.append(s)
+    cyl = [(f.Surface.Axis, f.Surface.Center) for s in shapes for f in s.Faces
            if f.Surface.TypeId == 'Part::GeomCylinder']
     out = []
     for o in _fasteners(d):
