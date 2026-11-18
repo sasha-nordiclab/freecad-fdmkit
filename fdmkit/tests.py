@@ -328,6 +328,12 @@ def selftest():
             ck('snapshot_restore', "snapshot_restore('open', solve=False)",
                lambda r: 'restored 2' in r and abs(links[1].Placement.Base.x - 80) < 1e-9)
             ck('chk_271_patterns', "chk()", lambda r: r.startswith('OK'))
+            nested = asm.newObject('Assembly::AssemblyObject', 'SubAsm')
+            nested.Placement.Base = V(0, 300, 0)
+            lk3 = nested.newObject('App::DocumentObjectGroup', 'SubFolder').newObject('App::Link', 'L3')
+            lk3.LinkedObject = _body(d7)        # at the sub-assembly origin: on L1 unless its frame counts
+            d7.recompute()
+            ck('check_nested', "check('L1','L3')", lambda r: r.startswith('check: OK 2'))
         finally:
             App.closeDocument(d7.Name)
             App.setActiveDocument(d.Name)

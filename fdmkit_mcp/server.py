@@ -53,7 +53,7 @@ when FreeCAD reported errors since the last call, the result ends with
 ' | FreeCAD report: N new errors since the last call' - read errors() and fix the cause |
 sel() = GUI selection + distance, angle of axes/normals, distance of parallel hole axes, diameters;
 names items 'pad.Face6'/'sk.Edge1', usable as refs | reopen() = save, close, open, recompute (clears undo).
-Namespace: fdmkit calls + App + Gui; import other modules inside the call."""
+Namespace: fdmkit calls + App + Gui + Part; import other modules inside the call."""
 
 INSTRUCTIONS = WORKFLOW_POLICY + """
 
@@ -67,7 +67,7 @@ Rules (full text skill/rules.md,fem.md;read named section first).
 7. Time/grams: tools/orca_slice.py,presets (A1 NordicLab,0.20mm NordicLab 0.6 Ballance,AzureFilm PETG HF);strength parts 100 % zig-zag.
 8. Reply OK/errors/numbers;no exports unless asked;temp files in scratchpad. Tokens (rules.md "Token economy";state in chat when asked): main session plans/briefs/reviews,one mid-tier subagent per edit batch (Claude: sonnet,effort medium;high for Assembly joints,cross-document params,check scripts),never the smallest tier or read-only inspection agents.
 9. Project AGENTS.md 60-70 lines: FreeCAD version,rules,one line per model file,verified state,decisions,open questions;details in params sheets/Git history;no session logs/per-part essays;update once per substantive change;trimmed details: read Git history (git log,git show <commit>:path).
-10. After every model change: reopen(),check(),lint();before handover case() on main drivers.
+10. After every model change: check();before handover lint(),case() on main drivers,reopen() if standalone.
 11. Before deleting an object with params-sheet expressions,clear them (setExpression(p,None) per ExpressionEngine entry) and recompute: else the next sheet change segfaults FreeCAD (27.1 too).
 12. Speed (rules.md "Speed with big documents"): focus() edited Bodies,freeze() Assembly/heavy parts,one batch per edit,Suppressed not delete,one full() at the end;never call while FreeCAD is busy.
 13. GUI: camera free;at the end leave edit mode,restore final visibility,axonometric + Fit All,keep user's selection;final Bodies: distinct saturated pastel ShapeColor at once.

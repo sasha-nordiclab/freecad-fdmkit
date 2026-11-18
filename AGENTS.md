@@ -13,10 +13,10 @@ Workflow: one working FCStd per project, history in Git; one small change -> foc
 
 ## Kit rules
 - Native PartDesign only (no Part::Feature blobs); one call = one transaction = one line; sketch helpers leave DoF 0.
-- `run()`: namespace = `__all__` + `App` + `Gui` (`?expr` is always aborted). Parses first (`ERR parse`). `_alive(d)` guards commit/abort when a call closes the document (`reopen()`). `_finish` refuses a pad/pocket that changes nothing. `_autosave()` saves at most every 300 s after a write call. A failed batch rolls back, so a following `undo()` undoes the previous call.
+- `run()`: namespace = `__all__` + `App` + `Gui` + `Part` (`?expr` is always aborted). Parses first (`ERR parse`). `_alive(d)` guards commit/abort when a call closes the document (`reopen()`). `_finish` refuses a pad/pocket that changes nothing. `_autosave()` saves at most every 300 s after a write call. A failed batch rolls back, so a following `undo()` undoes the previous call.
 - Errors: no console observer exists, so `_report_scan()` reads the Report view (`QTextEdit` 'Report view'), keeps error lines for `errors()`, appends to `~/Library/Logs/fdmkit/freecad.log`; they arrive after the call ("since the last call"). `mcp.log` there logs every call (5 MB rotation).
 - Hidden documents: Gui document (selection helpers work), no ActiveView. `_body()` looks for `pdbody` in every 3D view (CAM simulator/sheet tabs have no active Body) and skips CAM tool-bit Bodies (ToolBit makes its own `BitBody`; `cam_job` adds one last).
-- `check(*links)` checks assembled local parts, `check()` authoring Bodies; `case()` does not solve the Assembly. Fasteners objects: proxy module `Fasteners*`.
+- `check(*links)` checks assembled local parts in the document frame (`_frame()` walks sub-assemblies and folders), `check()` authoring Bodies; `case()` does not solve the Assembly. Fasteners objects: proxy module `Fasteners*`.
 - i10g link view providers expose `ShapeAppearance`, not `ShapeMaterial`: `tools/patches/i10g-shapeappearance.patch`; `i10g_video()` refuses without it.
 - `tools/orca_slice.py` needs OrcaSlicer 2.5+: user presets are copied into a scratch `--datadir` (`user/default`, `type` key added, `system` symlinked); the CLI resolves system parents from the `.opc` packs itself.
 - FreeCAD crashes and their workarounds: `KNOWN_ISSUES.md`.

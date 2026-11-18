@@ -1560,24 +1560,44 @@ def _line_dist(p, c, n):
     return (w - n * w.dot(n)).Length
 
 
+def _frame(o):
+    """Placement of o's containers in the document frame: sub-assemblies and Parts above it,
+    followed through plain folders (a Link in a folder has no GeoFeatureGroup parent)."""
+    pl = App.Placement()
+    node = o
+    while True:
+        parent = next((p for p in node.InList if node in getattr(p, 'Group', ())), None)
+        if parent is None:
+            return pl
+        if hasattr(parent, 'Placement'):
+            pl = parent.Placement.multiply(pl)
+        node = parent
+
+
+def _world_shape(o):
+    """o.Shape in the document frame, so parts of nested sub-assemblies compare correctly."""
+    s = o.Shape
+    f = _frame(o)
+    if not f.isIdentity():
+        s.Placement = f.multiply(s.Placement)
+    return s
+
+
 def _off_axis(d, bodies):
     """Fasteners whose axis runs through no cylindrical face of the given Bodies or of the
     document's App::Link instances (assembly parts live in other documents)."""
-    shapes = [b.Shape for b in bodies]
+    shapes = [_world_shape(b) for b in bodies]
     for o in d.Objects:
         if o.TypeId == 'App::Link' and o not in bodies:
             s = getattr(o, 'Shape', None)
             if s is None or s.isNull():
                 continue
-            s = s.copy()
-            if hasattr(o, 'getGlobalPlacement'):
-                s.Placement = o.getGlobalPlacement()
-            shapes.append(s)
+            shapes.append(_world_shape(o))
     cyl = [(f.Surface.Axis, f.Surface.Center) for s in shapes for f in s.Faces
            if f.Surface.TypeId == 'Part::GeomCylinder']
     out = []
     for o in _fasteners(d):
-        pl = o.getGlobalPlacement()
+        pl = _frame(o).multiply(o.Placement)
         ax = pl.Rotation.multVec(V(0, 0, 1))
         dist = [_line_dist(pl.Base, c, a) for a, c in cyl if abs(abs(a.dot(ax)) - 1) < 1e-4]
         if not dist or min(dist) > 1e-3:
@@ -1606,11 +1626,11 @@ def check(*bodies):
                 issues.append(f'{o.Name}: {e}')
         elif _bad(o):
             issues.append(f'{o.Name}: {o.getStatusString()}')
-    ok = [b for b in bs if not b.Shape.isNull() and b.Shape.isValid()]
-    for i, a in enumerate(ok):
-        for b in ok[i + 1:]:
-            if a.Shape.BoundBox.intersect(b.Shape.BoundBox):
-                v = a.Shape.common(b.Shape).Volume
+    ok = [(b, _world_shape(b)) for b in bs if not b.Shape.isNull() and b.Shape.isValid()]
+    for i, (a, sa) in enumerate(ok):
+        for b, sb in ok[i + 1:]:
+            if sa.BoundBox.intersect(sb.BoundBox):
+                v = sa.common(sb).Volume
                 if v > 1e-5:
                     issues.append(f'{a.Name} x {b.Name} {v:.4g} mm3')
     issues += [f'{n}: off hole axis' for n in _off_axis(d, bs)]
@@ -2297,9 +2317,10 @@ def _autosave(d):
 
 
 def _ns():
-    """Namespace of run(): the fdmkit calls plus App and, with a GUI, Gui."""
+    """Namespace of run(): the fdmkit calls plus App, Part and, with a GUI, Gui."""
     ns = {k: globals()[k] for k in __all__}
     ns['App'] = App
+    ns['Part'] = Part
     try:
         import FreeCADGui as Gui
         ns['Gui'] = Gui
