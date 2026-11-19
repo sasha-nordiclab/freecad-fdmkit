@@ -93,7 +93,8 @@ Fix the print orientation before modelling; keep "model axis → print Z" in min
 
 ## Edges, by print direction
 - Edges horizontal to the bed get a chamfer whose overhang is < 40°.
-- Edges along Z may be filleted. Bed edges get a chamfer (elephant foot), never a fillet. Upward-facing convex fillets are fine.
+- Fillet only edges that run along print Z (the round lies in the layer plane). Every other edge, convex or concave, facing up or down, gets a 45° chamfer of the same leg: a round across the layers prints as visible steps near its horizontal tangent, a chamfer prints clean (owner, 2026-11-19; appearance, not strength). So fix the print orientation before choosing edge finishes, and put sketch corner rounds (`fil`) only into profiles that lie in the layer plane.
+- Bed edges get a chamfer (elephant foot), never a fillet.
 
 ## Fits (per side)
 - moving 0.25–0.40; sliding 0.15–0.30; static 0.10–0.20; print-in-place ≥ 0.30 (≥ 0.40 is reliable).
