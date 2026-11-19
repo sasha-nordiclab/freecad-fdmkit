@@ -9,6 +9,7 @@ Rarely used calls are documented in `help('topic')` (starts regions patterns dre
 - Temporary files for a check go in scratchpad and are cleaned up afterwards; reuse an existing checker/report rather than create another per step. Respect the user's limits on slicing, FEM and time.
 
 ## Token economy (user rule)
+- Never run a check twice (owner, 2026-11-19): one result per check per model state. No second verification pass over findings, no repeat of check()/lint()/validate()/slice/FEM on unchanged geometry, no parallel reviewers re-measuring each other, no re-run of a passed check "to be sure". Re-check only what an edit touched. A background run that restarts by itself (sleep, limit) is stopped, not left to repeat finished work.
 - Roles: the main session plans, writes the brief and reviews the numbers; one mid-tier subagent (Claude: sonnet) per edit batch runs the calls. Effort medium; high for Assembly joints, cross-document params and check scripts. Never the smallest tier (haiku: results unusable), never a separate read-only inspection agent; a single short read goes from the main session.
 - Brief: document, exact change, acceptance numbers, stop conditions. Point to files and sections instead of retyping them.
 - Read only what the task needs: the AGENTS.md entry of the edited document and the named rules.md section, each once. Trust "Verified state"; re-measure only what the change touches.
