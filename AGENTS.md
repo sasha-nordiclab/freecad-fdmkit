@@ -42,3 +42,7 @@ Repro: `FREECAD_USER_HOME=$(mktemp -d) freecadcmd x.py`. Drop a workaround when 
 - #34055 Thickness/Defeaturing on an earlier feature drops later ones: Tip faces only.
 - #33685 deleting objects with sheet expressions segfaults the next sheet change: clear expressions, recompute, delete (rules.md "API traps").
 - #33798 (not ours) `exportPageAsPdf` segfault, not re-tested: `run()` refuses it.
+
+## Planned
+
+- 2026-11-19: `overhang(body, up, max_deg=40)` check (none exists; MotorHousing needed a one-off scan): per face (planar exact, curved sampled on a uv grid) report downward faces steeper than `max_deg` from print vertical, skip the bed plane, split short bridges (narrow side <= 10, both ends supported) from real overhangs; print direction from a per-Body property so `check()` can run it at the end of a stage.
