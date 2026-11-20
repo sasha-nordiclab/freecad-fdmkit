@@ -17,7 +17,7 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 ## Requirements
 
 - macOS. The paths in `tools/fc.py` and `tools/orca_slice.py` are macOS paths; on Linux or Windows, change them.
-- FreeCAD 27.1 weekly, build 20261103 (2026-11-03). fdmkit targets only this build; other versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
+- FreeCAD 27.1 weekly, build 20261117 (weekly-2026.11.18); build 20261103 passes the selftest too. Other versions are untested. When FreeCAD changes, the Report view asks you to run the selftest.
 - The [FreeCAD MCP addon](https://github.com/neka-nat/freecad-mcp) (`FreeCADMCP`), for its XML-RPC server on `127.0.0.1:9875`. fdmkit uses only that RPC server, not the addon's own MCP server.
 - Python 3.10 or newer on the host for the MCP server. It has no dependencies.
 - Optional: OrcaSlicer 2.5 or newer, for `orca_slice.py`.
@@ -146,8 +146,9 @@ fdmkit runs code in FreeCAD through the addon's XML-RPC server, and the copy it 
 
 ## Known FreeCAD 27.1 issues it works around
 
-- Deleting an object whose expressions use a spreadsheet alias makes the next sheet change segfault (FreeCAD #33685, still on build 20261103): clear the expressions and recompute first.
+- Deleting an object whose expressions use a spreadsheet alias makes the next sheet change segfault (FreeCAD #33685, still on build 20261117): clear the expressions and recompute first. Closing a document whose objects use another open document's aliases triggers the same crash on the next sheet change, so keep dependents open; `reopen()` refuses a document that open documents link to.
 - `Body.newObject()` of a pattern leaves the Tip behind (#34054), and a Thickness/Defeaturing on an earlier feature drops the later ones (#34055): the kit sets the Tip itself and accepts only Tip faces.
+- A saved cross-document link stores an absolute path (#34357): the kit rewrites it relative after each save.
 - `TechDrawGui.exportPageAsPdf` crashes FreeCAD (#33798); `run()` refuses it, export SVG.
 - With a decimal-comma locale, numbers written to the spreadsheet are stored as formulas (`'=40.5'`).
 - Link view providers have `ShapeAppearance` instead of `ShapeMaterial`, which breaks the Inbetweening (i10g) animation workbench. Apply `tools/patches/i10g-shapeappearance.patch` in its `Mod/Inbetweening` folder (`patch -p1 < ...`); `i10g_video()` checks for it.
