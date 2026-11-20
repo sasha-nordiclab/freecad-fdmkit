@@ -17,7 +17,7 @@ DESCRIPTION = """Run fdmkit calls in the open FreeCAD. 'a(); b(); c()' = one tra
 Lengths/angles: number or expression; bare params names allowed ('wall*2').
 P(name=val,...) set (lengths 'x mm'; a bare number is unitless) | P() list
 new(name) = NEW DOCUMENT; body(name) = new Body in the open one, made active (else helpers use the last Body; sk() names it when there are several)
-plane(name, base='XY'|datum, offset) | sk(name, on='XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
+plane(name, base='XY'|'Body.XY'|datum, offset) | sk(name, on='XY'|'Body.XY'|datum) | rect(sk,w,h,x=0,y=0,at='c'|'bl') | circ(sk,d,x,y)
 slot(sk,length,width,x,y,angle) | poly(sk,[(x,y),...]) | fil(sk,(x,y),r) | half(sk) cuts a sketch symmetric about its H axis to y>=0, in place
 Sketch shapes are fully constrained (DoF 0); names: r1_w, c1_d, s1_l...
 pad(sk,len,side='one'|'two'|'sym',reverse,length2) | pocket(sk,depth='through',reverse,depth2); side='two' needs length2/depth2 (number, expression or 'through')
@@ -62,21 +62,21 @@ Rules (full text skill/rules.md,fem.md;read named section first).
 2. Standard first: native features,workbenches (rules.md "Standard workbenches for each job"),standard/manufacturer parts;verify sizes;AddonManager only after user agrees;Assembly joints,not Placement expressions.
 3. Symmetry: copy vs mirror by hole/mount coordinates,never bbox;build one side,derive the other natively (Mirrored/App::Link);re-check each revision.
 4. Native PartDesign,sketches DoF 0,sizes in params,features on real datums via params (never absolute Z). Bosses before holes;after adding material holes stay through,nothing passes bed/mount faces. Loft sections/datum planes: rules.md "Sketch supports and minimal datum planes". Local Body origins + Assembly: rules.md "Local part coordinates".
-5. Print: overhang ≤40° from vertical;ligaments ≥3;rims ≥6;countersink/counterbore/nut outline ≥3 from any edge,wall,slot (M4 Ø9.8: centre ≥7.9);walls k x 0.6,never <1.8;lighten with tapered recesses,not windows;fillets only on edges along print Z (round in the layer plane),every other edge a 45° chamfer (rules.md "Edges, by print direction"). Radial hole sketches 1 mm outside the cylinder (tangent: OCC drops holes).
+5. Print: overhang ≤40° from vertical;ligaments ≥3;rims ≥6;countersink/counterbore/nut outline ≥3 from any edge,wall,slot (M4 Ø9.8: centre ≥7.9);walls k x 0.6,never <1.8;lighten with tapered recesses,not windows;fillets only on edges along print Z,every other edge a 45° chamfer (rules.md "Edges, by print direction"). Radial hole sketches 1 mm outside the cylinder (tangent: OCC drops holes).
 6. Strength/lightening only from FEM (fem.md);table first,change the model only after user agrees.
-7. Time/grams: tools/orca_slice.py,presets (A1 NordicLab,0.20mm NordicLab 0.6 Ballance,AzureFilm PETG HF);strength parts 100 % zig-zag.
-8. Reply OK/errors/numbers;no exports unless asked;temp files in scratchpad. Tokens (rules.md "Token economy";state in chat when asked): main session plans/briefs/reviews,one mid-tier subagent per edit batch (Claude: sonnet,effort medium;high for Assembly joints,cross-document params,check scripts),never the smallest tier or read-only inspection agents;never run a check twice on an unchanged model,no second verification pass.
-9. Project AGENTS.md 60-70 lines: FreeCAD version,rules,one line per model file,verified state,decisions,open questions;details in params sheets/Git history;no session logs/per-part essays;update once per substantive change;trimmed details: read Git history (git log,git show <commit>:path).
+7. Time/grams: tools/orca_slice.py with its default presets;strength parts 100 % zig-zag.
+8. Reply OK/errors/numbers;no exports unless asked;temp files in scratchpad. Tokens (rules.md "Token economy";state in chat when asked): main session plans/briefs/reviews;one mid-tier subagent per edit batch (Claude: sonnet,effort medium;high: Assembly joints,cross-document params,check scripts);never the smallest tier or read-only inspection agents;never check an unchanged model twice,no second verification pass.
+9. Project AGENTS.md 60-70 lines: FreeCAD version,rules,one line per model file,verified state,decisions,open questions;no session logs/per-part essays;update once per substantive change;details: params sheets,Git history (git log/show).
 10. After every model change: check();before handover lint(),case() on main drivers,reopen() if standalone.
-11. Before deleting an object with params-sheet expressions,clear them (setExpression(p,None) per ExpressionEngine entry) and recompute: else the next sheet change segfaults FreeCAD (27.1 too).
-12. Speed (rules.md "Speed with big documents"): focus() edited Bodies,freeze() Assembly/heavy parts,one batch per edit,Suppressed not delete,one full() at the end;never call while FreeCAD is busy.
+11. Before deleting an object with params-sheet expressions: setExpression(p,None) per ExpressionEngine entry,then recompute;else the next sheet change segfaults FreeCAD.
+12. Speed (rules.md "Speed with big documents"): focus() edited Bodies,freeze() Assembly/heavy parts,Suppressed not delete,one full() at the end;never call while FreeCAD is busy.
 13. GUI: camera free;at the end leave edit mode,restore final visibility,axonometric + Fit All,keep user's selection;final Bodies: distinct saturated pastel ShapeColor at once.
 14. Pictures only via View3D.saveImage of the user's document: white background,pastel,no text,colour = deflection;no staged scenes.
 15. Animations: rules.md "Animations and exploded views" (freeze_all first,i10g ShapeAppearance patch,thaw_all + full() after).
 16. Caliper reverse engineering: ignore 0.1-0.2 deviations,prefer stack checks between two sel() faces,change where several checks agree.
 17. Metal CNC (rules.md "Metal CNC parts"): turning first,one Revolution of a closed R-Z profile;inside corners along the cutter axis = params.CncCornerRadius,floor-wall corners sharp;ISO tap drills,ISO 273 clearances;cnc() after each change;doubts: cam_job+cam_slot+cam_sim on the real model.
 18. Local-coordinate migration: Git checkpoint;compare assembled geometry both ways,test drivers/joints,reopen/check/lint (cnc for metal).
-19. Critical FreeCAD failure (crash,RPC unreachable,segfault,corrupt/lost save,hang): append a dated line to fdmkit KNOWN_ISSUES.md (build,call,documents,symptom,loss,workaround),commit only if asked. doc.save() before reopen();after a crash restart FreeCAD,verify saved state,redo lost edits."""
+19. Critical FreeCAD failure (crash,segfault,hang,RPC unreachable,corrupt/lost save): dated line in fdmkit KNOWN_ISSUES.md (build,call,documents,symptom,loss,workaround),commit only if asked. doc.save() before reopen();after a crash restart FreeCAD,verify saved state,redo lost edits."""
 
 LOG = os.path.expanduser('~/Library/Logs/fdmkit/mcp.log')
 
@@ -109,7 +109,7 @@ def handle(msg):
     if method == 'initialize':
         result = {'protocolVersion': (msg.get('params') or {}).get('protocolVersion', '2025-06-18'),
                   'capabilities': {'tools': {}},
-                  'serverInfo': {'name': 'fdmkit', 'version': '0.5.0'},
+                  'serverInfo': {'name': 'fdmkit', 'version': '0.5.1'},
                   'instructions': INSTRUCTIONS}
     elif method == 'tools/list':
         result = {'tools': [TOOL]}

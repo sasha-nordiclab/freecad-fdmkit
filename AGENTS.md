@@ -5,7 +5,8 @@ Developing fdmkit; modelling rules: `skill/SKILL.md`, `rules.md`, `fem.md`. Hist
 Workflow: one working FCStd per project, history in Git; one small change -> focused check -> save the same file -> Git commit. No versioned copies, backup folders or per-revision scripts/reports unless requested.
 
 ## Setup
-- Target: FreeCAD 27.1 weekly build 20261103, macOS arm64 (26.3 unsupported). Probe the API in the running FreeCAD.
+- Target: FreeCAD 27.1 weekly build 20261117 (weekly-2026.11.18), macOS arm64; 20261103 still passes the selftest (26.3 unsupported). Probe the API in the running FreeCAD.
+- Test without touching the user's session: a second FreeCAD with `FREECAD_USER_HOME=<tmp>` (Mod links to fdmkit and FreeCADMCP, RPC on another port), `QT_QPA_PLATFORM=offscreen`, then `FREECAD_RPC=http://127.0.0.1:<port> python3 tools/fc.py --selftest`. A new weekly is tried this way from the mounted dmg before it is installed.
 - Layout: `fdmkit/__init__.py` core (helpers, features, checks, assembly, `help()`, `body()`, `run()`); `machining.py` CNC/CAM; `drawing.py` TechDraw dims; `tests.py` selftest (`--reload` reloads all). `Init.py` autoload; `tools/fc.py` client; `fdmkit_mcp/server.py` MCP server.
 - The repo is symlinked as `~/Library/Application Support/FreeCAD/v27-1/Mod/fdmkit`.
 - After editing: `python3 tools/fc.py --reload && python3 tools/fc.py --selftest` and `uvx ruff check`. Selftest (hidden documents) stays all-OK; add a check per new function.
@@ -13,10 +14,12 @@ Workflow: one working FCStd per project, history in Git; one small change -> foc
 
 ## Kit rules
 - Native PartDesign only (no Part::Feature blobs); one call = one transaction = one line; sketch helpers leave DoF 0.
-- `run()`: namespace = `__all__` + `App` + `Gui` + `Part` (`?expr` is always aborted). Parses first (`ERR parse`). `_alive(d)` guards commit/abort when a call closes the document (`reopen()`). `_finish` refuses a pad/pocket that changes nothing. `_autosave()` saves at most every 300 s after a write call. A failed batch rolls back, so a following `undo()` undoes the previous call.
-- Errors: no console observer exists, so `_report_scan()` reads the Report view (`QTextEdit` 'Report view'), keeps error lines for `errors()`, appends to `~/Library/Logs/fdmkit/freecad.log`; they arrive after the call ("since the last call"). `mcp.log` there logs every call (5 MB rotation).
+- `run()`: namespace = `__all__` + `App` + `Gui` + `Part` (`?expr` is always aborted). Parses first (`ERR parse`). Transactions are per document in FreeCAD, so `_run` books one in EVERY open document: rollback and `?` also cover documents reached by `App.getDocument()`/`setActiveDocument`; a step that commits inside the batch (`Std_ToggleFreeze`) is re-booked, undone on failure (`_undo_added`: by undo names, the stack is capped) and the freeze toggles are reverted (`_freeze_log`). `_alive(d)` guards a document closed inside the call. `_finish` refuses a pad/pocket that changes nothing. `_autosave()` saves the entry document at most every 300 s, only when a call changed it (`_dirty`, cleared by any save through the observer) and never while objects are frozen. A failed batch rolls back, so a following `undo()` undoes the previous call.
+- Speed: consecutive `sk/rect/circ/slot/poly/fil` statements with literal arguments share one recompute (`_lazy`, flushed before any other statement and at the end); sketch helpers add their constraints in one `addConstraint(list)` (`_dim`/`_place` queue into `acc`, `_commit` adds: a single `addConstraint` solves the sketch each time). `_valid`/`_vol` remember `isValid()`/`Volume` per TShape (`isPartner`), so `check()` validates each source once however many links show it. `_bb` = `optimalBoundingBox(False, False)`: `Shape.BoundBox` boxes the display mesh (Ø40 read 39.9 on a default profile). Module state (`_report`, `_saved`, `_dirty`, `_focus`, `FdmkitError`) survives `--reload`.
+- Body targeting: features, patterns, `move`, `mirror`, `defeature`, `thickness` and origin axes use the Body that owns the given feature or sketch (`_owner`), `sk`/`plane` take `'Box.XY'`; only a bare origin key falls back to `_body()`.
+- Errors: no console observer exists, so `_report_scan()` reads the text blocks added to the Report view since the last scan (`QTextEdit` 'Report view'; never the whole text: it reached 256 MB), keeps error lines for `errors()`, appends to `~/Library/Logs/fdmkit/freecad.log`; they arrive after the call ("since the last call"). `mcp.log` there logs every call (5 MB rotation).
 - Hidden documents: Gui document (selection helpers work), no ActiveView. `_body()` looks for `pdbody` in every 3D view (CAM simulator/sheet tabs have no active Body) and skips CAM tool-bit Bodies (ToolBit makes its own `BitBody`; `cam_job` adds one last).
-- `check(*links)` checks assembled local parts in the document frame (`_frame()` walks sub-assemblies and folders), `check()` authoring Bodies; `case()` does not solve the Assembly. Fasteners objects: proxy module `Fasteners*`.
+- `check(*links)` checks assembled local parts in the document frame (`_frame()` walks sub-assemblies and folders; names may live in the one other open document that has them all), `check()` authoring Bodies; `case()` does not solve the Assembly. Fasteners objects: proxy module `Fasteners*`.
 - i10g link view providers expose `ShapeAppearance`, not `ShapeMaterial`: `tools/patches/i10g-shapeappearance.patch`; `i10g_video()` refuses without it.
 - `tools/orca_slice.py` needs OrcaSlicer 2.5+: user presets are copied into a scratch `--datadir` (`user/default`, `type` key added, `system` symlinked); the CLI resolves system parents from the `.opc` packs itself.
 - FreeCAD crashes and their workarounds: `KNOWN_ISSUES.md`.
@@ -36,11 +39,15 @@ Workflow: one working FCStd per project, history in Git; one small change -> foc
 - `Mesh.foraminate` and `nearestFacetOnRay` hit on both sides of the ray (filter by direction) and graze chords at edges (confirm on the exact solid). Draft clone of a PartDesign feature keeps its sketch frame: Placement = `index * feature.Placement`.
 - CAM: CAM_SimulatorGL is 3-axis, lists only `Job*`, opens as an MDI tab; work-plane ops store paths in the plane frame; no lathe ops; Rotary Surface needs opencamlib + a rotary Machine (not wrapped).
 
-## Upstream issues, still reproducing on 27.1 20261103
+## Upstream issues, still reproducing on 27.1 20261117
 Repro: `FREECAD_USER_HOME=$(mktemp -d) freecadcmd x.py`. Drop a workaround when its repro passes.
 - #34054 `Body.newObject()` of Mirrored/PolarPattern leaves the Tip behind: `_pattern()`/`mirror()` set the Tip.
 - #34055 Thickness/Defeaturing on an earlier feature drops later ones: Tip faces only.
-- #33685 deleting objects with sheet expressions segfaults the next sheet change: clear expressions, recompute, delete (rules.md "API traps").
+- #33685 deleting objects with sheet expressions segfaults the next sheet change: clear expressions, recompute, delete (rules.md "API traps"). Same crash (or `__next_prime overflow`) after closing a dependent document: never close dependents in a running session; `reopen()` refuses a document that open documents link to.
+- #34357 XLink file saved as an absolute path: `_XLinkObserver` rewrites it after each save (reads only Document.xml, copies the other zip entries raw).
+- #34522 SubShapeBinder `MakeFace=True` fills the hole of nested wires: `MakeFace=False`. #34523 `Visibility` of an Assembly member touches the Assembly (extra solve): `purgeTouched()` in visibility-only code.
+- Fixed in 20261117: #34056 (RigidGroup init traceback); the `rigid_group()` guard stays until 20261103 is gone.
+- FreeCADMCP <= 0.1.25 (addon, not FreeCAD): its dispatch heartbeat dies after the first task that spins the event loop, so a call met by a held mouse button waited the whole timeout; `_dispatch_watchdog()` keeps the queue polled, `tools/fc.py` asks with a 15 s empty preflight first.
 - #33798 (not ours) `exportPageAsPdf` segfault, not re-tested: `run()` refuses it.
 
 ## Planned

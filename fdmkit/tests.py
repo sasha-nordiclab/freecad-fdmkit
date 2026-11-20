@@ -1,11 +1,12 @@
 """fdmkit selftest: builds throwaway parts through run() in hidden documents."""
 import math
 import os
+import time
 
 import FreeCAD as App
 import Part
 
-from . import _HELP, PARAMS, V, _aliases, _body, _init, _ref, _sk_issue, _tipvol, run  # noqa: F401
+from . import _HELP, PARAMS, V, _aliases, _body, _dirty, _expr, _init, _ref, _saved, _sk_issue, _tipvol, run  # noqa: F401
 
 
 def selftest():
@@ -29,11 +30,16 @@ def selftest():
             ok = False
         res.append((label, ok, r))
 
+    def setup_failed(e):    # a line between two checks raised: report it and keep the results so far
+        return ('setup', False, f'tests.py:{e.__traceback__.tb_lineno} {type(e).__name__}: {e}')
+
     ok = lambda r: ': OK' in r or r.startswith('P:')
     dof0 = lambda r: r.endswith('DoF 0')
     try:
         ck('P', "P(width=40, depth=20, height=5, r_c=3)", ok)
         ck('P_reserved', "P(h=1)", lambda r: r.startswith('ERR') and 'h' not in _aliases(d.getObject(PARAMS)))
+        res.append(('expr_lt', _expr('width<depth ? width : <<pad>>.Length') ==
+                    'params.width<params.depth ? params.width : <<pad>>.Length', _expr('width<depth')))
         ck('help', "?help()", lambda r: all(f'{t}: ' in r for t in _HELP) and 'cam_job' in r)
         ck('help_topic', "?help('cam')", lambda r: 'cam_job' in r and 'cam_slot' in r)
         ck('help_unknown', "?help('nosuch')", lambda r: 'ERR' in r and 'cam:' in r)
@@ -104,6 +110,14 @@ def selftest():
         ck('thaw_all', "thaw_all()",
            lambda r: r.startswith('thaw_all:')
            and not any('Freezed' in o.getStatusString() for o in d.Objects))
+        ck('freeze_in_batch', "P(height=7); freeze('pad'); nosuch()",      # the freeze command commits inside the batch
+           lambda r: r.startswith('ERR step 3') and abs(d.getObject(PARAMS).get('height') - 6) < 1e-9
+           and 'Freezed' not in d.getObject('pad').getStatusString())
+        nd = App.newDocument('fdmkit_nosheet', 'fdmkit_nosheet', True, True)
+        App.setActiveDocument(nd.Name)
+        ck('P_read_no_sheet', "P()", lambda r: r.startswith('P:') and not nd.Objects)   # a read creates no sheet
+        App.closeDocument(nd.Name)
+        App.setActiveDocument(d.Name)
         ck('i10g_video', "i10g_video()",
            lambda r: r.startswith('ERR') and 'no Animation' in r)
         d2 = App.newDocument('fdmkit_263_features', 'fdmkit_263_features', True, True)
@@ -124,6 +138,8 @@ def selftest():
             ck('groove', "sk('groove_sk','XZ'); rect('groove_sk',1,1,4.5,3.5); "
                "groove('groove_sk')", lambda r: 'groove: OK' in r)
             ck('chk_263', "chk()", lambda r: r.startswith('OK'))
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d2.Name)
             App.setActiveDocument(d.Name)
@@ -152,6 +168,8 @@ def selftest():
                lambda r: 'hole: OK' in r and d3.getObject('hole').CosmeticThread
                and not d3.getObject('hole').ModelThread)
             ck('chk_patterns', "chk()", lambda r: r.startswith('OK'))
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d3.Name)
             App.setActiveDocument(d.Name)
@@ -183,6 +201,8 @@ def selftest():
             ck('remap', "remap('lid',(0,8))",
                lambda r: 'lid: OK' in r and d6.getObject('lid').Profile[1] == ['InternalFace1']
                and abs(d6.getObject('lid').Shape.BoundBox.ZMax - 14) < 1e-6)
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d6.Name)
             App.setActiveDocument(d.Name)
@@ -202,6 +222,10 @@ def selftest():
                "half('he'); P(e2=14)", lambda r: abs(d4.getObject('he').Shape.BoundBox.XMax - 22) < 1e-6)
             ck('half_diamond', "sk('hd','XY'); poly('hd',[(-10,0),(0,-6),(10,0),(0,6)]); half('hd')",
                lambda r: 'area 120.0 -> 60.0' in r)
+            ck('half_keeps_expr', "P(dx=10, dy=6); sk('hp','XY'); poly('hp',[('-dx',0),(0,'-dy'),('dx',0),(0,'dy')]); "
+               "half('hp'); P(dx=14)", lambda r: abs(d4.getObject('hp').Shape.BoundBox.XMax - 14) < 1e-6
+               and abs(d4.getObject('hp').Shape.BoundBox.XMin + 14) < 1e-6)
+            ck('P_text', "P(oops='2*')", lambda r: r.startswith('ERR') and 'oops' not in _aliases(d4.getObject(PARAMS)))
             ck('sketch_bad_args', "rect('hd',5,5,at='tr')", lambda r: "expected 'c' or 'bl'" in r)
             ck('mirror', "mirror('pad','XZ')", lambda r: 'Mirrored: OK' in r)
             ck('half_drive', "P(half_width=24,half_height=12)",
@@ -211,6 +235,8 @@ def selftest():
             ck('move', "plane('later','XY',6); move('later','pad')",
                lambda r: 'later: after pad' in r)
             ck('chk_existing_helpers', "chk()", lambda r: r.startswith('OK'))
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d4.Name)
             App.setActiveDocument(d.Name)
@@ -250,8 +276,14 @@ def selftest():
             tmp = tempfile.mkdtemp(prefix='fdmkit_')
             fn = os.path.join(tmp, 'fdmkit_checks.FCStd')
             d5.saveAs(fn)
+            t0 = _saved[d5.Name] = time.time() - 301      # autosave is due
+            _dirty.discard(d5.Name)
+            ck('autosave_idle', "tree()", lambda r: _saved[d5.Name] == t0)      # nothing changed: no save
+            ck('autosave_dirty', "P(blk_h=11)", lambda r: _saved[d5.Name] > t0 + 300 and d5.Name not in _dirty)
             ck('reopen', "reopen(True)", lambda r: r.startswith('reopen: OK'))
             live = App.ActiveDocument.Name
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             if live in App.listDocuments():
                 App.closeDocument(live)
@@ -278,6 +310,8 @@ def selftest():
             ck('cam_bodies', "check()", lambda r: r.startswith('check: OK 1 bodies'))
             ck('cam_del', "cam_del('JobT')", lambda r: r == 'cam_del: JobT'
                and not [o for o in d6.Objects if o.TypeId.startswith('Path') or getattr(o, 'BitBody', None)])
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d6.Name)
             App.setActiveDocument(d.Name)
@@ -334,6 +368,19 @@ def selftest():
             lk3.LinkedObject = _body(d7)        # at the sub-assembly origin: on L1 unless its frame counts
             d7.recompute()
             ck('check_nested', "check('L1','L3')", lambda r: r.startswith('check: OK 2'))
+            holder = d7.addObject('App::Part', 'Holder')        # a real feature in a moved container
+            holder.Placement.Base = V(0, 0, 500)
+            holder.newObject('Part::Box', 'BoxIn')
+            d7.recompute()
+            ck('check_in_part', "check('BoxIn')", lambda r: r.startswith('check: OK 1'))
+            App.setActiveDocument(d.Name)       # link names resolve in the one document that has them
+            ck('check_other_doc', "check('L1','L3')", lambda r: r.startswith('check: OK 2'))
+            ck('rollback_other_doc', f"App.getDocument('{d7.Name}').addObject('Part::Box','Leak'); nosuch()",
+               lambda r: r.startswith('ERR step 2') and 'batch rolled back' in r and d7.getObject('Leak') is None)
+            ck('read_other_doc', f"?App.getDocument('{d7.Name}').addObject('Part::Box','Leak2').Name",
+               lambda r: r == 'Leak2' and d7.getObject('Leak2') is None)
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d7.Name)
             App.setActiveDocument(d.Name)
@@ -368,6 +415,16 @@ def selftest():
                lambda r: 'thickness: OK' in r and 'bb 40.0x40.0x10.0' in r
                and d8.getObject('thickness').Shape.Volume < vfull / 3)
             ck('chk_271_features', "chk()", lambda r: r.startswith('OK'))
+            # 'Shell' is the last Body (no 3D view: the default target); the first one is reached by name
+            ck('sk_body_key', "sk('k8','Body.XY'); circ('k8',4,10,0); pocket('k8',3,reverse=True,name='k8cut')",
+               lambda r: 'k8: OK on Body.XY in Body' in r and d8.getObject('k8cut').getParentGeoFeatureGroup().Name == 'Body')
+            ck('pattern_own_body', "polar('k8cut',3)",
+               lambda r: 'polar: OK' in r and d8.getObject('Body').Tip.Name == 'polar')
+            ck('move_own_body', "plane('late8','Body.XY',2); move('late8','pad')",
+               lambda r: 'late8: after pad' in r and d8.getObject('Body').Tip.Name == 'polar')
+            ck('move_tip', "move('polar','k8cut')", lambda r: d8.getObject('Body').Tip.Name == 'polar')
+        except Exception as e:
+            res.append(setup_failed(e))
         finally:
             App.closeDocument(d8.Name)
             App.setActiveDocument(d.Name)
@@ -375,8 +432,15 @@ def selftest():
         desc, ins = _server_texts()
         n = len(ins.encode())   # Claude Code cuts server instructions at 4096; bytes are the safe measure
         res.append(('instructions_len', n <= 4096, f'INSTRUCTIONS {n} bytes, max 4096'))
+        import sys
+        gd = sys.modules.get('rpc_server.gui_dispatch')
+        timer = getattr(App, '_fdmkit_dispatch_timer', None)
+        res.append(('dispatch_watchdog', not App.GuiUp or gd is None or hasattr(gd, 'start_heartbeat')
+                    or bool(timer and timer.isActive()), f'timer {timer!r}'))
         res.append(('description_len', len(desc) <= 6000, f'DESCRIPTION {len(desc)} chars, max 6000'))
         App.setActiveDocument(d.Name)
+    except Exception as e:
+        res.append(setup_failed(e))
     finally:
         App.closeDocument(d.Name)
         if prev and prev in App.listDocuments():
@@ -416,10 +480,14 @@ def _xlink_check():
         t.set('B1', f'={a.Name}#params.w * 2')
         b.recompute()
         b.save()
-        xml = zipfile.ZipFile(b.FileName).read('Document.xml').decode()
+        z = zipfile.ZipFile(b.FileName)
+        xml = z.read('Document.xml').decode()
         paths = sorted(set(re.findall(r'XLink file="([^"]+)"', xml)))
-        good = paths == ['xl_a.FCStd'] and abs(t.get('B1').Value - 10) < 1e-9
-        return ('xlink_relative', good, f'XLink paths {paths}')
+        good = paths == ['xl_a.FCStd'] and abs(t.get('B1').Value - 10) < 1e-9 and z.testzip() is None
+        App.setActiveDocument(a.Name)       # the source: its alias is used only by the dependent
+        r1, r2 = run('lint()'), run('reopen(True)')
+        good = good and 'unused' not in r1 and r2.startswith('ERR') and 'linked from' in r2
+        return ('xlink_relative', good, f'XLink paths {paths} | {r1} | {r2}')
     except Exception as e:
         return ('xlink_relative', False, f'ERR {e}')
     finally:

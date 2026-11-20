@@ -9,13 +9,14 @@ import ast
 import math
 import os
 import re
+import sys
 import time
 
 import FreeCAD as App
 import Part
 import Sketcher
 
-__version__ = '0.5.0'
+__version__ = '0.5.1'
 __all__ = ['new', 'body', 'help', 'P', 'plane', 'midplane', 'sk', 'rect', 'circ', 'slot', 'poly', 'fil',
            'half', 'regions', 'remap', 'pad', 'pocket', 'hole', 'revolve', 'groove', 'linear', 'polar', 'circular',
            'path_pattern', 'point_pattern', 'mirror', 'move', 'defeature', 'thickness',
@@ -33,11 +34,15 @@ _PREF = 'User parameter:BaseApp/Preferences/Mod/fdmkit'
 _ORIGIN = {'XY': 'XY_Plane', 'XZ': 'XZ_Plane', 'YZ': 'YZ_Plane',
            'X': 'X_Axis', 'Y': 'Y_Axis', 'Z': 'Z_Axis'}
 _POS = {0: 'edge', 1: 'start', 2: 'end', 3: 'center'}
-_ID = re.compile(r'(?<![\w.<])([A-Za-z_]\w*)')
+_ID = re.compile(r'(?<![\w.])(?<!<<)([A-Za-z_]\w*)')   # not after '.', not inside <<Label>>
 
 
 class FdmkitError(Exception):
     pass
+
+
+# reload() re-executes this module: keep the class (submodules hold it) and the session state
+FdmkitError = globals().setdefault('_FdmkitError', FdmkitError)
 
 
 # ---------------------------------------------------------------- context
@@ -93,8 +98,38 @@ def _obj(x):
     d = _doc()
     o = d.getObject(x) or next(iter(d.getObjectsByLabel(x)), None)
     if o is None:
-        raise FdmkitError(f'{x}: not found')
+        raise FdmkitError(f'{x}: not found in {d.Name}')
     return o
+
+
+def _owner(o):
+    """The Body that owns feature, sketch or datum o, else the active Body: a document opened
+    as a link dependency has no 3D view, so its active Body cannot be switched."""
+    b = o.getParentGeoFeatureGroup()
+    return b if b is not None and b.TypeId == 'PartDesign::Body' else _body()
+
+
+_BODY_KEY = re.compile(r'(.+)\.(XY|XZ|YZ)')
+
+
+def _plane_ref(on, who):
+    """(Body, plane) for 'XY' (the active Body), 'Box.XY' (that Body's origin plane) or a
+    datum plane (the Body that owns it)."""
+    m = _BODY_KEY.fullmatch(on) if isinstance(on, str) else None
+    if on in _ORIGIN:
+        b = _body()
+        ref = _origin(b, on)
+    elif m:
+        b = _obj(m[1])
+        if b.TypeId != 'PartDesign::Body':
+            raise FdmkitError(f'{who}: {m[1]} is not a Body')
+        ref = _origin(b, m[2])
+    else:
+        ref = _obj(on)
+        b = _owner(ref)
+    if ref.TypeId not in ('PartDesign::Plane', 'App::Plane'):
+        raise FdmkitError(f'{who}: {on} is not a plane')
+    return b, ref
 
 
 def _free(name):
@@ -155,9 +190,10 @@ def _expr(v):
     """Expression text for v with param aliases qualified as params.<name>."""
     d = App.ActiveDocument
     s = d and _sheet(False, d)
-    names = set(_aliases(s)) if s else set()
     text = str(v)
-    return _ID.sub(lambda m: f'{s.Name}.{m[1]}' if m[1] in names
+    if not s:
+        return text
+    return _ID.sub(lambda m: f'{s.Name}.{m[1]}' if s.getCellFromAlias(m[1]) is not None
                    and not re.match(r'\s*\(', text[m.end():]) else m[1], text)
 
 
@@ -174,15 +210,21 @@ def _num(v):
 
 def _cell(v):
     # en_DK uses a decimal comma, so numbers go in as formulas
-    if isinstance(v, (int, float)):
-        return f'={v!r}'
+    if isinstance(v, bool) or type(v) is int:
+        return f'={int(v)!r}'
+    if isinstance(v, (int, float)):     # numpy scalars print as np.float64(1.2)
+        return f'={float(v)!r}'
     v = str(v).strip()
     return v if v.startswith('=') else '=' + v
 
 
 def P(*names, **values):
     """P(wall=1.2, h2='wall*2') sets; P() lists; P('wall') reads."""
-    s = _sheet()
+    s = _sheet(create=bool(values))
+    if s is None:      # reading must not create a sheet (the wrong document may be active)
+        if names:
+            raise FdmkitError(f'P: no params sheet in {_doc().Name}')
+        return 'P: '
     al = _aliases(s)
     unknown = [k for k in names if k not in al]
     if unknown:
@@ -207,6 +249,11 @@ def P(*names, **values):
             s.set(cell, _cell(v))
     if values:
         _rc(d)
+        if _bad(s):     # nothing propagates from an invalid sheet, also when it was invalid before
+            raise FdmkitError(f'P: {s.Name}: {s.getStatusString()}')
+        text = [k for k in values if isinstance(s.get(k), str)]
+        if text:        # FreeCAD stores a formula it cannot parse as text and stays 'Up-to-date'
+            raise FdmkitError('P: not a number or formula: ' + ', '.join(f'{k}={s.get(k)!r}' for k in text))
         bad = [o for o in _scope(d) if _bad(o) and o.Name not in before]
         if bad:
             raise FdmkitError('P: ' + '; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
@@ -239,30 +286,47 @@ def _xlink_relative(xml, doc_dir):
 
 
 def _fix_xlink_paths(fn):
-    """Rewrite absolute XLink paths in a saved FCStd to relative ones; True if it changed."""
+    """Rewrite absolute XLink paths in a saved FCStd to relative ones; True if it changed.
+    Only Document.xml is read; the other entries are copied as raw bytes, not recompressed."""
     import zipfile
     doc_dir = os.path.dirname(os.path.realpath(fn))
-    with zipfile.ZipFile(fn) as z:
-        entries = [(i, z.read(i.filename)) for i in z.infolist()]
-    changed = False
-    out = []
-    for info, data in entries:
-        if info.filename == 'Document.xml':
-            text = data.decode('utf-8')
-            new = _xlink_relative(text, doc_dir)
-            if new != text:
-                changed = True
-                out.append((info, new.encode('utf-8')))
-                continue
-        out.append((info, data))
-    if not changed:
-        return False
     tmp = fn + '.fdmkit-tmp'
-    with zipfile.ZipFile(tmp, 'w') as z:
-        for info, data in out:
-            z.writestr(info, data, compress_type=info.compress_type)
+    with zipfile.ZipFile(fn) as z:
+        text = z.read('Document.xml').decode('utf-8')
+        new = _xlink_relative(text, doc_dir)
+        if new == text:
+            return False
+        data = new.encode('utf-8')
+        try:
+            _zip_replace_raw(z, fn, tmp, 'Document.xml', data)
+        except Exception:       # zipfile internals changed: recompress everything instead
+            with zipfile.ZipFile(tmp, 'w') as out:
+                for info in z.infolist():
+                    out.writestr(info, data if info.filename == 'Document.xml' else z.read(info.filename),
+                                 compress_type=info.compress_type)
     os.replace(tmp, fn)
     return True
+
+
+def _zip_replace_raw(z, fn, tmp, name, data):
+    """Write archive z (file fn) to tmp with entry name replaced by data; every other entry
+    keeps its compressed bytes (local header + data span copied as is)."""
+    import zipfile
+    infos = sorted(z.infolist(), key=lambda i: i.header_offset)
+    ends = [i.header_offset for i in infos[1:]] + [z.start_dir]
+    with open(fn, 'rb') as src, zipfile.ZipFile(tmp, 'w') as out:
+        for info, end in zip(infos, ends):
+            if info.filename == name:
+                out.writestr(info, data, compress_type=info.compress_type)
+                continue
+            src.seek(info.header_offset)
+            raw = src.read(end - info.header_offset)
+            info.header_offset = out.fp.tell()
+            out.fp.write(raw)
+            out.filelist.append(info)
+            out.NameToInfo[info.filename] = info
+            out.start_dir = out.fp.tell()
+            out._didModify = True
 
 
 class _XLinkObserver:
@@ -271,6 +335,12 @@ class _XLinkObserver:
     save the absolute XLink paths are rewritten relative to the saved file."""
 
     def slotFinishSaveDocument(self, doc, fn):
+        try:    # any save of the document's own file (kit, user, reopen()) restarts the autosave clock
+            if fn and doc.FileName and os.path.realpath(fn) == os.path.realpath(doc.FileName):
+                _saved[doc.Name] = time.time()
+                _dirty.discard(doc.Name)
+        except Exception:
+            pass
         try:
             if fn and fn.endswith('.FCStd') and _fix_xlink_paths(fn):
                 App.Console.PrintLog(f'fdmkit: relative XLink paths in {fn}\n')
@@ -408,13 +478,7 @@ def body(name):
 def plane(name, base='XY', offset=0):
     """Datum plane parallel to an origin plane or another datum plane."""
     _free(name)
-    b = _body()
-    if base in _ORIGIN:
-        ref = _origin(b, base)
-    else:
-        ref = _obj(base)
-        if ref.TypeId not in ('PartDesign::Plane', 'App::Plane'):
-            raise FdmkitError(f'plane: {base} is not a plane')
+    b, ref = _plane_ref(base, 'plane')
     pl = b.newObject('PartDesign::Plane', name)
     pl.AttachmentSupport = [(ref, '')]
     pl.MapMode = 'FlatFace'
@@ -431,7 +495,8 @@ def midplane(name, a, b):
     """Datum plane midway between two planes or planar faces (26.3 MidPlane attachment);
     non-parallel ones give the bisector through their intersection line."""
     _free(name)
-    body = _body()
+    own = [_owner(_ref(x)[0]) for x in (a, b) if isinstance(x, tuple) or x not in _ORIGIN]
+    body = own[0] if own else _body()
     pl = body.newObject('PartDesign::Plane', name)
     (oa, sa), (ob, sb) = _ref(a, body), _ref(b, body)
     pl.AttachmentSupport = [(oa, sa[0]), (ob, sb[0])]
@@ -446,14 +511,11 @@ def midplane(name, a, b):
 def sk(name, on='XY'):
     """Sketch on an origin plane or a datum plane (never on a face)."""
     _free(name)
-    b = _body()
-    ref = _origin(b, on) if on in _ORIGIN else _obj(on)
-    if ref.TypeId not in ('PartDesign::Plane', 'App::Plane'):
-        raise FdmkitError(f'sk: {on} is not a plane')
+    b, ref = _plane_ref(on, 'sk')
     s = b.newObject('Sketcher::SketchObject', name)
     s.AttachmentSupport = [(ref, '')]
     s.MapMode = 'FlatFace'
-    _rc(s.Document)
+    _rc_later(s)
     several = sum(o.TypeId == 'PartDesign::Body' for o in s.Document.Objects) - len(_bits(s.Document)) > 1
     return f'{name}: OK on {on}' + (f' in {b.Name}' if several else '')
 
@@ -478,23 +540,34 @@ def _auto(s, prefix, name):
     return f'{prefix}{i}'
 
 
-def _dim(s, cons, name, v):
-    i = s.addConstraint(cons)
-    s.renameConstraint(i, name)
+def _dim(acc, cons, name, v):
+    """Queue a named dimension (and its expression) in acc = ([constraints], [(name, expr)])."""
+    cons.Name = name
+    acc[0].append(cons)
     if isinstance(v, str):
-        s.setExpression('Constraints.' + name, _expr(v))
+        acc[1].append((name, _expr(v)))
+
+
+def _commit(s, acc):
+    """Add the queued constraints in ONE call: addConstraint(list) only appends, while every
+    single addConstraint() solves the whole sketch (47 ms each on a 160-line sketch)."""
+    s.addConstraint(acc[0])
+    for name, e in acc[1]:
+        s.setExpression('Constraints.' + name, e)
 
 
 def _zero(v):
     return isinstance(v, (int, float)) and v == 0
 
 
-def _place(s, geo, pos, x, y, name):
+def _place(s, acc, geo, pos, x, y, name):
+    """Position constraints <name>_x / <name>_y; a numeric 0 pins the point to the axis instead
+    (no named constraint: pass '0' or a param to keep a dimension that can be driven later)."""
     for v, axis, kind, suffix in ((x, -2, 'DistanceX', 'x'), (y, -1, 'DistanceY', 'y')):
         if _zero(v):
-            s.addConstraint(C('PointOnObject', geo, pos, axis))
+            acc[0].append(C('PointOnObject', geo, pos, axis))
         else:
-            _dim(s, C(kind, -1, 1, geo, pos, _val(s, v)), f'{name}_{suffix}', v)
+            _dim(acc, C(kind, -1, 1, geo, pos, _val(s, v)), f'{name}_{suffix}', v)
 
 
 def _cname(s, i1):
@@ -529,9 +602,54 @@ def _sk_clash(s):
                                               'PartiallyRedundantConstraints', 'MalformedConstraints'))
 
 
+# Consecutive sketch statements of one run() batch share ONE document recompute: each would
+# otherwise recompute the Body, its links and joints and re-solve the Assembly (see _run).
+_lazy = {'on': False, 'docs': set(), 'sketches': set()}
+_LAZY_CALLS = ('sk', 'rect', 'circ', 'slot', 'poly', 'fil')
+
+
+def _rc_later(s):
+    d = s.Document
+    if _lazy['on']:
+        _lazy['docs'].add(d.Name)
+        _lazy['sketches'].add((d.Name, s.Name))
+    else:
+        _rc(d)
+
+
+def _rc_flush():
+    """Run the recomputes that sketch statements left for later; a sketch they leave in error
+    (lost attachment) fails the batch as it would have failed its own statement."""
+    names, _lazy['docs'] = _lazy['docs'], set()
+    sketches, _lazy['sketches'] = _lazy['sketches'], set()
+    for n in names:
+        if n in App.listDocuments():
+            _rc(App.getDocument(n))
+    for dn, sn in sorted(sketches):
+        o = App.getDocument(dn).getObject(sn) if dn in App.listDocuments() else None
+        if o is not None and _bad(o):
+            raise FdmkitError(f'{sn}: {o.getStatusString()}')
+
+
+def _literal(node):
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        node = node.operand
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_literal(e) for e in node.elts)
+    return isinstance(node, ast.Constant)
+
+
+def _lazy_call(node):
+    """True for a statement like rect('s', 'w', 5): a sketch helper with literal arguments only,
+    which neither reads nor needs the recomputed model."""
+    c = node.value if isinstance(node, ast.Expr) else None
+    return (isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id in _LAZY_CALLS
+            and all(_literal(a) for a in c.args) and all(k.arg and _literal(k.value) for k in c.keywords))
+
+
 def _sk_done(s, label):
-    _rc(s.Document)
-    err = _sk_issue(s)
+    _rc_later(s)
+    err = _sk_issue(s)      # solves the Touched sketch itself
     if err:
         raise FdmkitError(f'{s.Name}.{label}: {err}')
     return f'{s.Name}.{label}: DoF 0'
@@ -548,18 +666,18 @@ def rect(sketch, w, h, x=0, y=0, at='c', name=None):
         raise FdmkitError(f'rect: size {W:g} x {H:g} must be > 0')
     x0, y0 = (X - W / 2, Y - H / 2) if at == 'c' else (X, Y)
     p = [V(x0, y0, 0), V(x0 + W, y0, 0), V(x0 + W, y0 + H, 0), V(x0, y0 + H, 0)]
-    g = [s.addGeometry(Part.LineSegment(p[i], p[(i + 1) % 4])) for i in range(4)]
-    s.addConstraint([C('Coincident', g[i], 2, g[(i + 1) % 4], 1) for i in range(4)]
-                    + [C('Horizontal', g[0]), C('Horizontal', g[2]),
-                       C('Vertical', g[1]), C('Vertical', g[3])])
-    _dim(s, C('DistanceX', g[0], 1, g[0], 2, W), n + '_w', w)
-    _dim(s, C('DistanceY', g[1], 1, g[1], 2, H), n + '_h', h)
+    g = list(s.addGeometry([Part.LineSegment(p[i], p[(i + 1) % 4]) for i in range(4)]))
+    acc = ([C('Coincident', g[i], 2, g[(i + 1) % 4], 1) for i in range(4)]
+           + [C('Horizontal', g[0]), C('Horizontal', g[2]), C('Vertical', g[1]), C('Vertical', g[3])], [])
+    _dim(acc, C('DistanceX', g[0], 1, g[0], 2, W), n + '_w', w)
+    _dim(acc, C('DistanceY', g[1], 1, g[1], 2, H), n + '_h', h)
     if at == 'c':
         cp = s.addGeometry(Part.Point(V(X, Y, 0)), True)
-        s.addConstraint(C('Symmetric', g[0], 1, g[2], 1, cp, 1))
-        _place(s, cp, 1, x, y, n)
+        acc[0].append(C('Symmetric', g[0], 1, g[2], 1, cp, 1))
+        _place(s, acc, cp, 1, x, y, n)
     else:
-        _place(s, g[0], 1, x, y, n)
+        _place(s, acc, g[0], 1, x, y, n)
+    _commit(s, acc)
     return _sk_done(s, n)
 
 
@@ -569,8 +687,10 @@ def circ(sketch, d, x=0, y=0, name=None):
         raise FdmkitError(f'circ: diameter {d} must be > 0')
     n = _auto(s, 'c', name)
     g = s.addGeometry(Part.Circle(V(_val(s, x), _val(s, y), 0), V(0, 0, 1), _val(s, d) / 2))
-    _dim(s, C('Diameter', g, _val(s, d)), n + '_d', d)
-    _place(s, g, 3, x, y, n)
+    acc = ([], [])
+    _dim(acc, C('Diameter', g, _val(s, d)), n + '_d', d)
+    _place(s, acc, g, 3, x, y, n)
+    _commit(s, acc)
     return _sk_done(s, n)
 
 
@@ -588,18 +708,19 @@ def slot(sketch, length, width, x=0, y=0, angle=0, name=None):
     l1 = s.addGeometry(Part.LineSegment(s.Geometry[a1].EndPoint, s.Geometry[a2].StartPoint))
     l2 = s.addGeometry(Part.LineSegment(s.Geometry[a2].EndPoint, s.Geometry[a1].StartPoint))
     cp = s.addGeometry(Part.Point(V(X, Y, 0)), True)
-    s.addConstraint([C('Tangent', a1, 2, l1, 1), C('Tangent', l1, 2, a2, 1),
-                     C('Tangent', a2, 2, l2, 1), C('Tangent', l2, 2, a1, 1),
-                     C('Equal', a1, a2), C('Symmetric', a1, 3, a2, 3, cp, 1)])
-    _dim(s, C('Diameter', a1, W), n + '_w', width)
+    acc = ([C('Tangent', a1, 2, l1, 1), C('Tangent', l1, 2, a2, 1),
+            C('Tangent', a2, 2, l2, 1), C('Tangent', l2, 2, a1, 1),
+            C('Equal', a1, a2), C('Symmetric', a1, 3, a2, 3, cp, 1)], [])
+    _dim(acc, C('Diameter', a1, W), n + '_w', width)
     span = L - W if not isinstance(length, str) and not isinstance(width, str) \
         else f'({length}) - ({width})'
-    _dim(s, C('Distance', a1, 3, a2, 3, L - W), n + '_l', span)
+    _dim(acc, C('Distance', a1, 3, a2, 3, L - W), n + '_l', span)
     if _zero(angle):
-        s.addConstraint(C('Horizontal', l1))
+        acc[0].append(C('Horizontal', l1))
     else:
-        _dim(s, C('Angle', l1, t), n + '_a', f'({angle}) * 1 deg' if isinstance(angle, str) else angle)
-    _place(s, cp, 1, x, y, n)
+        _dim(acc, C('Angle', l1, t), n + '_a', f'({angle}) * 1 deg' if isinstance(angle, str) else angle)
+    _place(s, acc, cp, 1, x, y, n)
+    _commit(s, acc)
     return _sk_done(s, n)
 
 
@@ -611,10 +732,11 @@ def poly(sketch, pts, name=None):
     k = len(vs)
     if k < 3 or any((vs[i] - vs[(i + 1) % k]).Length < 1e-6 for i in range(k)):
         raise FdmkitError(f'poly: needs >= 3 distinct consecutive points, got {k}')
-    g = [s.addGeometry(Part.LineSegment(vs[i], vs[(i + 1) % k])) for i in range(k)]
-    s.addConstraint([C('Coincident', g[i], 2, g[(i + 1) % k], 1) for i in range(k)])
+    g = list(s.addGeometry([Part.LineSegment(vs[i], vs[(i + 1) % k]) for i in range(k)]))
+    acc = ([C('Coincident', g[i], 2, g[(i + 1) % k], 1) for i in range(k)], [])
     for i, (a, b) in enumerate(pts):
-        _place(s, g[i], 1, a, b, f'{n}_{i}')
+        _place(s, acc, g[i], 1, a, b, f'{n}_{i}')
+    _commit(s, acc)
     return _sk_done(s, n)
 
 
@@ -636,7 +758,9 @@ def fil(sketch, at, r, name=None):
     n0 = s.GeometryCount
     s.fillet(best[1], best[2], _val(s, r), True, True)
     arc = next(i for i in range(n0, s.GeometryCount) if isinstance(s.Geometry[i], Part.ArcOfCircle))
-    _dim(s, C('Radius', arc, _val(s, r)), n + '_r', r)
+    acc = ([], [])
+    _dim(acc, C('Radius', arc, _val(s, r)), n + '_r', r)
+    _commit(s, acc)
     return _sk_done(s, n)
 
 
@@ -787,6 +911,10 @@ def half(sketch):
             s.setExpression('Constraints.' + c.Name, None)
     keep = {i: (type(geo[i]).__name__, _ends(geo[i]), getattr(geo[i], 'Radius', None)) for i in cross}
     s.delGeometries(sorted(low))
+    alive = {c.Name for c in s.Constraints if c.Name}
+    for c, refs, e in lost:     # a constraint moved to a kept coincident point keeps name and value
+        if c.Name and e and c.Name in alive:
+            s.setExpression('Constraints.' + c.Name, e)
     new = {}
     for i, (kind, pts, r) in keep.items():
         new[i] = _find_geo(s, kind, pts, r)
@@ -1002,9 +1130,60 @@ def remap(feature, *at):
 
 
 # ---------------------------------------------------------------- features
-def _shape(sh):
-    bb = sh.BoundBox
-    return f'V {sh.Volume:.1f} bb {bb.XLength:.1f}x{bb.YLength:.1f}x{bb.ZLength:.1f}'
+def _bb(sh):
+    """Exact bounding box. Shape.BoundBox boxes the display mesh once the GUI has tessellated
+    the shape, so a Ø40 cylinder reads 39.9 with coarse view settings."""
+    try:
+        return sh.optimalBoundingBox(False, False)      # no triangulation, no shape tolerance
+    except RuntimeError:                                # null or empty shape: 'Bnd_Box is void'
+        return sh.BoundBox
+
+
+# (doc name, object name) -> [shape, valid, volume] of the shape last examined. isValid() costs
+# more than the boolean that made the shape and FreeCAD caches neither; a recompute that
+# rebuilds the shape gives a new TShape, so a stale entry never matches.
+_facts = {}
+
+
+def _fact(o, sh, i, compute):
+    key = (o.Document.Name, o.Name)
+    e = _facts.get(key)
+    if e is None or not e[0].isPartner(sh):
+        if len(_facts) > 400:
+            _facts.clear()
+        e = _facts[key] = [sh, None, None]
+    if e[i] is None:
+        e[i] = compute(sh)
+    return e[i]
+
+
+def _valid(o, sh=None):
+    """sh.isValid() for the non-null shape sh of object o, remembered per shape."""
+    return _fact(o, o.Shape if sh is None else sh, 1, lambda x: x.isValid())
+
+
+def _vol(o, sh=None):
+    """Volume of the non-null shape sh of object o, remembered per shape."""
+    return _fact(o, o.Shape if sh is None else sh, 2, lambda x: x.Volume)
+
+
+def _shape(sh, v=None):
+    bb = _bb(sh)
+    return f'V {sh.Volume if v is None else v:.1f} bb {bb.XLength:.1f}x{bb.YLength:.1f}x{bb.ZLength:.1f}'
+
+
+def _inherit_look(f, src):
+    """Give a new Tip feature the look of the feature it replaces: a Body is drawn with its
+    Tip's appearance and Body.newObject() leaves the default grey."""
+    if not App.GuiUp or src is None:
+        return
+    try:
+        a, b = src.ViewObject, f.ViewObject
+        for prop in ('ShapeAppearance', 'Transparency', 'LineColor', 'PointColor'):
+            if prop in a.PropertiesList and prop in b.PropertiesList:
+                setattr(b, prop, getattr(a, prop))
+    except Exception:       # a view property must never fail the call
+        pass
 
 
 def _setq(o, prop, v):
@@ -1024,8 +1203,7 @@ def _pick(table, value, arg):
 
 def _sketch_body(s):
     """The Body that owns sketch s (a feature must live there), else the active Body."""
-    b = s.getParentGeoFeatureGroup()
-    return b if b is not None and b.TypeId == 'PartDesign::Body' else _body()
+    return _owner(s)
 
 
 def _feature(kind, name, sketch, at=None):
@@ -1045,18 +1223,21 @@ def _finish(f, s):
     bad = [o for o in (s, f) if o and _bad(o)]
     if bad:
         raise FdmkitError('; '.join(f'{o.Name}: {o.getStatusString()}' for o in bad))
-    if f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
-        raise FdmkitError(f'{f.Name}: ' + ('no shape' if f.Shape.isNull() else f'solids {len(f.Shape.Solids)}'))
-    if prev and not prev.Shape.isNull() and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
+    sh = f.Shape
+    if sh.isNull() or not _valid(f, sh) or len(sh.Solids) != 1:
+        raise FdmkitError(f'{f.Name}: ' + ('no shape' if sh.isNull() else f'solids {len(sh.Solids)}'))
+    v = _vol(f, sh)
+    if prev and not prev.Shape.isNull() and abs(v - _vol(prev)) < 1e-6:
         hint = ('profile misses the solid or points away: try reverse=True'
                 if 'Reversed' in f.PropertiesList and f.TypeId != 'PartDesign::Thickness'
                 else 'nothing to cut or remove there')
-        raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); {hint}')
+        raise FdmkitError(f'{f.Name}: changed nothing (V {v:.1f}); {hint}')
     if s:
         s.Visibility = False
+    _inherit_look(f, prev or f.getParentGeoFeatureGroup())
     if prev:
         prev.Visibility = False
-    return f'{f.Name}: OK ' + _shape(f.Shape)
+    return f'{f.Name}: OK ' + _shape(sh, v)
 
 
 _SIDES = {'one': 'One side', 'two': 'Two sides', 'sym': 'Symmetric'}
@@ -1093,7 +1274,7 @@ def _set_start(f, start, offset, reference):
             s = _sk(reference[0])
             f.StartReference = (s, _region_names(s, reference[1]))
         else:
-            ref = _origin(_body(), reference) if reference in _ORIGIN else _obj(reference)
+            ref = _origin(_owner(f), reference) if reference in _ORIGIN else _obj(reference)
             if ref.TypeId not in ('PartDesign::Plane', 'App::Plane'):
                 raise FdmkitError(f'{reference}: not a plane; a sketch region is (sketch, (x, y))')
             f.StartReference = (ref, [''])
@@ -1163,7 +1344,6 @@ def hole(sketch, diameter, depth='through', name=None, start='profile',
         raise FdmkitError('hole: thread_type required for thread_size or model_thread')
     point = _pick(_DRILL, drill_point, 'drill_point')
     f, s = _feature('PartDesign::Hole', name, sketch)
-    _rc(f.Document)  # Hole populates its dynamic properties after a base recompute.
     if depth == 'through':
         f.DepthType = 'ThroughAll'
     else:
@@ -1210,7 +1390,7 @@ def _set_type(f, type, up_to):
         raise FdmkitError('type=up_to_face needs up_to (a plane or Feature.FaceN); other types take none')
     f.Type = _TYPES[type]
     if up_to is not None:
-        f.UpToFace = _ref(up_to)
+        f.UpToFace = _ref(up_to, _owner(f))
 
 
 def _rotation(sketch, kind, angle, axis, name, side, reverse,
@@ -1218,7 +1398,7 @@ def _rotation(sketch, kind, angle, axis, name, side, reverse,
     if axis not in ('V_Axis', 'H_Axis', 'X', 'Y', 'Z'):
         raise FdmkitError('axis: expected V_Axis, H_Axis, X, Y or Z')
     f, s = _feature(kind, name, sketch)
-    f.ReferenceAxis = (s, [axis]) if axis in ('V_Axis', 'H_Axis') else (_origin(_body(), axis), [''])
+    f.ReferenceAxis = (s, [axis]) if axis in ('V_Axis', 'H_Axis') else (_origin(_owner(f), axis), [''])
     _setq(f, 'Angle', angle)
     f.SideType = _pick(_SIDES, side, 'side')
     f.Reversed = reverse
@@ -1256,11 +1436,11 @@ def _solid_tail(b):
 
 
 def _pattern(kind, who, features, name, suppressed):
-    """New PartDesign pattern of features in the active Body, suppressed instances set."""
-    b = _body()
+    """New PartDesign pattern of features in their own Body, suppressed instances set."""
     fs = [_obj(x) for x in ([features] if isinstance(features, str) else features)]
+    b = _owner(fs[0]) if fs else _body()
     if not fs or any(f not in b.Group or not f.isDerivedFrom('PartDesign::Feature') for f in fs):
-        raise FdmkitError(f'{who}: originals must be features in the active Body')
+        raise FdmkitError(f'{who}: originals must be features of one Body')
     if any(not isinstance(i, int) or i < 0 for i in suppressed):
         raise FdmkitError(f'{who}: suppressed indices must be integers >= 0')
     if name:
@@ -1286,13 +1466,16 @@ def _pattern_done(f, fs):
             raise FdmkitError(f'{f.Name}: suppressed {idx} outside the instances')
     _rc(f.Document)
     prev = f.BaseFeature                # a pattern gets its BaseFeature on recompute
-    if _bad(f) or f.Shape.isNull() or not f.Shape.isValid() or len(f.Shape.Solids) != 1:
-        raise FdmkitError(f'{f.Name}: {f.getStatusString()} solids {len(f.Shape.Solids)}')
-    if prev and abs(f.Shape.Volume - prev.Shape.Volume) < 1e-6:
-        raise FdmkitError(f'{f.Name}: changed nothing (V {f.Shape.Volume:.1f}); instances miss the solid')
+    sh = f.Shape
+    if _bad(f) or sh.isNull() or not _valid(f, sh) or len(sh.Solids) != 1:
+        raise FdmkitError(f'{f.Name}: {f.getStatusString()} solids {len(sh.Solids)}')
+    v = _vol(f, sh)
+    if prev and not prev.Shape.isNull() and abs(v - _vol(prev)) < 1e-6:
+        raise FdmkitError(f'{f.Name}: changed nothing (V {v:.1f}); instances miss the solid')
+    _inherit_look(f, prev)
     for o in fs:
         o.Visibility = False
-    return f'{f.Name}: OK ' + _shape(f.Shape)
+    return f'{f.Name}: OK ' + _shape(sh, v)
 
 
 def polar(features, occurrences, axis='Z', angle=360, suppressed=(), name=None):
@@ -1304,7 +1487,7 @@ def polar(features, occurrences, axis='Z', angle=360, suppressed=(), name=None):
     if any(isinstance(i, int) and i >= occurrences for i in suppressed):
         raise FdmkitError('polar: suppressed indices must be 0..occurrences-1')
     f, fs = _pattern('PartDesign::PolarPattern', 'polar', features, name, suppressed)
-    f.Axis = (_origin(_body(), axis), [''])
+    f.Axis = (_origin(_owner(f), axis), [''])
     f.Occurrences = occurrences
     _setq(f, 'Angle', angle)
     return _pattern_done(f, fs)
@@ -1336,7 +1519,7 @@ def linear(features, direction, count, step=None, extent=None, direction2=None, 
             continue
         if (st is None) == (ex is None) and n > 1:
             raise FdmkitError(f'linear: give step{sfx} or extent{sfx}')
-        setattr(f, 'Direction' + sfx, _ref(dirn))
+        setattr(f, 'Direction' + sfx, _ref(dirn, _owner(f)))
         setattr(f, 'Occurrences' + sfx, n)
         setattr(f, 'Reversed' + sfx, rev)
         if st is not None:
@@ -1361,7 +1544,7 @@ def circular(features, rings, radial, tangential, axis='Z', symmetry=1,
     if not all(isinstance(n, int) and n >= 1 for n in (rings, symmetry)):
         raise FdmkitError('circular: rings and symmetry must be integers >= 1')
     f, fs = _pattern('PartDesign::CircularPattern', 'circular', features, name, suppressed)
-    f.Axis = (_origin(_body(), axis), [''])
+    f.Axis = (_origin(_owner(f), axis), [''])
     f.NumberCircles = rings
     f.Symmetry = symmetry
     f.StartAtShape = start_at_shape
@@ -1403,7 +1586,8 @@ def _faces(faces, who):
     refs = [_ref(x) for x in ([faces] if isinstance(faces, str) else faces)]
     if not refs or len({o.Name for o, _ in refs}) != 1 or any(not s[0].startswith('Face') for _, s in refs):
         raise FdmkitError(f"{who}: faces must be 'Feature.FaceN' of one feature")
-    base, b = refs[0][0], _body()
+    base = refs[0][0]
+    b = base if base.TypeId == 'PartDesign::Body' else _owner(base)
     if base == b:
         base = b.Tip
     if base != b.Tip:
@@ -1418,7 +1602,7 @@ def defeature(faces, name=None):
     if name:
         _free(name)
     base, subs = _faces(faces, 'defeature')
-    f = _body().newObject('PartDesign::Defeaturing', name or 'defeature')
+    f = _owner(base).newObject('PartDesign::Defeaturing', name or 'defeature')
     f.Base = (base, subs)
     return _finish(f, None)
 
@@ -1434,7 +1618,7 @@ def thickness(faces, value, mode='skin', join='arc', inward=True, name=None):
     if name:
         _free(name)
     base, subs = _faces(faces, 'thickness')
-    f = _body().newObject('PartDesign::Thickness', name or 'thickness')
+    f = _owner(base).newObject('PartDesign::Thickness', name or 'thickness')
     f.Base = (base, subs)
     _setq(f, 'Value', value)
     f.Mode = _pick(_THICK, mode, 'mode')
@@ -1444,15 +1628,18 @@ def thickness(faces, value, mode='skin', join='arc', inward=True, name=None):
 
 
 def move(feature, after):
-    """Move a feature or sketch to just after another one in the active body."""
-    b = _body()
+    """Move a feature or sketch to just after another one in its Body."""
     f, t = _obj(feature), _obj(after)
+    b = _owner(f)
     before = {o.Name for o in b.Group if _bad(o)}
-    tip_last = b.Tip == _solid_tail(b)
-    b.removeObject(f)
+    tip = b.Tip
+    tip_last = tip == _solid_tail(b)
+    b.removeObject(f)       # moves the Tip back when f is the Tip
     b.insertObject(f, t, True)
     if tip_last:
         b.Tip = _solid_tail(b)
+    elif tip == f:
+        b.Tip = f
     _rc(f.Document)
     bad = [o for o in b.Group if _bad(o) and o.Name not in before]
     if bad:
@@ -1463,8 +1650,8 @@ def move(feature, after):
 def mirror(features, plane='XY', name=None):
     """PartDesign::Mirrored of features (a name or a list) about a body origin plane or datum,
     placed after the last of them."""
-    b = _body()
     fs = [_obj(x) for x in ([features] if isinstance(features, str) else features)]
+    b = _owner(fs[0]) if fs else _body()
     if name:
         _free(name)
     ref = _origin(b, plane) if plane in _ORIGIN else _obj(plane)
@@ -1478,9 +1665,11 @@ def mirror(features, plane='XY', name=None):
     if b.Tip is None or b.Group.index(m) > b.Group.index(b.Tip):
         b.Tip = m       # else the mirrored half is outside the Body shape (same trap as patterns)
     _rc(m.Document)
-    if _bad(m) or not m.Shape.isValid() or len(m.Shape.Solids) != 1:
-        raise FdmkitError(f'{m.Name}: {m.getStatusString()} solids {len(m.Shape.Solids)}')
-    return f'{m.Name}: OK ' + _shape(m.Shape)
+    sh = m.Shape
+    if _bad(m) or sh.isNull() or not _valid(m, sh) or len(sh.Solids) != 1:
+        raise FdmkitError(f'{m.Name}: {m.getStatusString()} solids {len(sh.Solids)}')
+    _inherit_look(m, m.BaseFeature)
+    return f'{m.Name}: OK ' + _shape(sh, _vol(m, sh))
 
 
 # ---------------------------------------------------------------- inspect
@@ -1500,11 +1689,12 @@ def chk(body=None):
     t = b.Tip
     if t is None or t.Shape.isNull():
         return 'ERR ' + ('; '.join(issues) or 'empty body')
-    if not t.Shape.isValid():
+    sh = t.Shape
+    if not _valid(t, sh):
         issues.append('tip shape invalid')
-    if len(t.Shape.Solids) != 1:
-        issues.append(f'solids {len(t.Shape.Solids)}')
-    return 'ERR ' + '; '.join(issues) if issues else f'OK {t.Name} ' + _shape(t.Shape)
+    if len(sh.Solids) != 1:
+        issues.append(f'solids {len(sh.Solids)}')
+    return 'ERR ' + '; '.join(issues) if issues else f'OK {t.Name} ' + _shape(sh, _vol(t, sh))
 
 
 def why(name):
@@ -1576,17 +1766,19 @@ def _frame(o):
 
 def _world_shape(o):
     """o.Shape in the document frame, so parts of nested sub-assemblies compare correctly."""
-    s = o.Shape
+    s = Part.Shape(o.Shape)     # the Shape of a real feature (Body, Fasteners screw) is immutable
     f = _frame(o)
     if not f.isIdentity():
         s.Placement = f.multiply(s.Placement)
     return s
 
 
-def _off_axis(d, bodies):
+def _off_axis(d, bodies, fasteners):
     """Fasteners whose axis runs through no cylindrical face of the given Bodies or of the
     document's App::Link instances (assembly parts live in other documents)."""
-    shapes = [_world_shape(b) for b in bodies]
+    if not fasteners:
+        return []
+    shapes = [_world_shape(b) for b in bodies if not b.Shape.isNull()]
     for o in d.Objects:
         if o.TypeId == 'App::Link' and o not in bodies:
             s = getattr(o, 'Shape', None)
@@ -1596,7 +1788,7 @@ def _off_axis(d, bodies):
     cyl = [(f.Surface.Axis, f.Surface.Center) for s in shapes for f in s.Faces
            if f.Surface.TypeId == 'Part::GeomCylinder']
     out = []
-    for o in _fasteners(d):
+    for o in fasteners:
         pl = _frame(o).multiply(o.Placement)
         ax = pl.Rotation.multVec(V(0, 0, 1))
         dist = [_line_dist(pl.Base, c, a) for a, c in cyl if abs(abs(a.dot(ax)) - 1) < 1e-4]
@@ -1605,18 +1797,52 @@ def _off_axis(d, bodies):
     return out
 
 
+def _check_objs(names, d):
+    """(objects, document) for check(*names): the active document, else the one other open
+    document that has them all (assembly link names while a source document is active)."""
+    def find(x, doc):
+        return x if not isinstance(x, str) else doc.getObject(x) or next(iter(doc.getObjectsByLabel(x)), None)
+    hit = [(doc, [find(x, doc) for x in names]) for doc in [d] + [x for x in App.listDocuments().values() if x != d]]
+    hit = [(doc, objs) for doc, objs in hit if all(o is not None for o in objs)]
+    if not hit:
+        miss = [x for x in names if find(x, d) is None]
+        raise FdmkitError(f'{", ".join(map(str, miss))}: not found in {d.Name}')
+    if hit[0][0] != d and len(hit) > 1:
+        raise FdmkitError(f'check: {", ".join(map(str, names))} exist in {", ".join(x.Name for x, _ in hit)}; '
+                          'activate one')
+    doc, objs = hit[0]
+    owners = {o.Document.Name for o in objs}
+    if len(owners) > 1:
+        raise FdmkitError(f'check: objects of several documents ({", ".join(sorted(owners))})')
+    return objs, objs[0].Document
+
+
 def check(*bodies):
     """Whole document: each Body one valid solid, no object in error, sketches at DoF 0,
     no volume intersection between Bodies, every Fasteners object on a hole axis."""
     d = _doc()
-    bs = [_obj(n) for n in bodies] if bodies else _bodies(d)
+    if bodies:
+        bs, d = _check_objs(bodies, d)
+    else:
+        bs = _bodies(d)
     issues = []
+    ok = []
     for b in bs:
         s = b.Shape
         if s.isNull():
             issues.append(f'{b.Name}: no shape')
-        elif not s.isValid() or len(s.Solids) != 1:
-            issues.append(f'{b.Name}: {len(s.Solids)} solids' + ('' if s.isValid() else ', invalid'))
+            continue
+        src = b.getLinkedObject(True)   # unscaled links to one source share its shape: validated once
+        scale = getattr(b, 'ScaleVector', None)
+        valid = _valid(src if src is not None and (scale is None or tuple(scale) == (1, 1, 1)) else b, s)
+        n = len(s.Solids)
+        if not valid or n != 1:
+            issues.append(f'{b.Name}: {n} solids' + ('' if valid else ', invalid'))
+        if valid:
+            w = _world_shape(b)
+            box = w.BoundBox            # may be the display mesh's box, inside the surface by its sag
+            box.enlarge(0.05 + 0.005 * box.DiagonalLength)
+            ok.append((b, w, box))
     for o in d.Objects:
         if o.TypeId.startswith('TechDraw'):
             continue
@@ -1626,17 +1852,17 @@ def check(*bodies):
                 issues.append(f'{o.Name}: {e}')
         elif _bad(o):
             issues.append(f'{o.Name}: {o.getStatusString()}')
-    ok = [(b, _world_shape(b)) for b in bs if not b.Shape.isNull() and b.Shape.isValid()]
-    for i, (a, sa) in enumerate(ok):
-        for b, sb in ok[i + 1:]:
-            if sa.BoundBox.intersect(sb.BoundBox):
+    for i, (a, sa, ba) in enumerate(ok):
+        for b, sb, bb in ok[i + 1:]:
+            if ba.intersect(bb):
                 v = sa.common(sb).Volume
                 if v > 1e-5:
                     issues.append(f'{a.Name} x {b.Name} {v:.4g} mm3')
-    issues += [f'{n}: off hole axis' for n in _off_axis(d, bs)]
+    fs = _fasteners(d)
+    issues += [f'{n}: off hole axis' for n in _off_axis(d, bs, fs)]
     if issues:
         return 'check: ERR ' + '; '.join(issues)
-    return f'check: OK {len(bs)} bodies, {len(_fasteners(d))} fasteners'
+    return f'check: OK {len(bs)} bodies, {len(fs)} fasteners'
 
 
 def _tangent_hole(h):
@@ -1727,6 +1953,15 @@ def lint():
     s = _sheet(False, d)
     if s:
         used = ' '.join(e for o in d.Objects if o.TypeId != 'Spreadsheet::Sheet' for _, e in o.ExpressionEngine)
+        for x in App.listDocuments().values():     # open documents that depend on this one
+            try:
+                if x.Name == d.Name or d.Name not in [y.Name for y in x.getDependentDocuments()]:
+                    continue
+            except Exception:
+                continue
+            used += ' ' + ' '.join(e for o in x.Objects for _, e in o.ExpressionEngine)
+            used += ' ' + ' '.join(sh.getContents(c) for sh in x.Objects if sh.TypeId == 'Spreadsheet::Sheet'
+                                   for c in sh.getUsedCells() if sh.getContents(c).startswith('='))
         used += ' ' + ' '.join(sh.getContents(c) for sh in d.Objects if sh.TypeId == 'Spreadsheet::Sheet'
                                for c in sh.getUsedCells() if sh.getContents(c).startswith('='))
         out += [f'{s.Name}.{a}: unused' for a in _aliases(s) if not re.search(rf'\b{re.escape(a)}\b', used)]
@@ -1777,7 +2012,7 @@ def _describe(sh):
             return f'plane n({n.x:.3g}, {n.y:.3g}, {n.z:.3g})'
         if hasattr(s, 'Radius'):
             return (f'{s.TypeId[10:].lower()} R{s.Radius:.4g} D{2 * s.Radius:.4g}'
-                    f' Z {sh.BoundBox.ZMin:.4g}..{sh.BoundBox.ZMax:.4g}')
+                    f' Z {_bb(sh).ZMin:.4g}..{_bb(sh).ZMax:.4g}')
         return s.TypeId[10:].lower()
     if sh.ShapeType == 'Edge':
         c = sh.Curve
@@ -1887,6 +2122,16 @@ def reopen(hidden=False):
     fn = d.FileName
     if not fn:
         raise FdmkitError('reopen: the document has no file')
+    users = []
+    for x in App.listDocuments().values():
+        try:
+            if x.Name != d.Name and d.Name in [y.Name for y in x.getDependentDocuments()]:
+                users.append(x.Name)
+        except Exception:
+            pass
+    if users:   # closing a linked source under its dependents crashed FreeCAD three times (KNOWN_ISSUES)
+        raise FdmkitError(f'reopen: {d.Name} is linked from {", ".join(users)}; '
+                          'save and cold-open the top document instead')
     d.save()
     App.closeDocument(d.Name)
     nd = App.openDocument(fn, hidden)
@@ -1948,7 +2193,7 @@ def link_array(source, kind, count=None, step=None, axis=None, angle=360, path=N
     _rc(d)
     if _bad(f) or f.ElementCount < 1:
         raise FdmkitError(f'{f.Name}: {f.getStatusString()} elements {f.ElementCount}')
-    bb = f.Shape.BoundBox
+    bb = _bb(f.Shape)
     return f'{f.Name}: OK {f.ElementCount} links of {src.Name} bb {bb.XLength:.1f}x{bb.YLength:.1f}x{bb.ZLength:.1f}'
 
 
@@ -2027,13 +2272,13 @@ def snapshot_restore(name, solve=True):
 
 
 # ---------------------------------------------------------------- speed
-_focus = {}   # doc Uid -> list of Body names whose recompute is enough
+_focus = globals().get('_focus') or {}   # doc Name (a Uid survives Save As and file copies) -> list of Body names whose recompute is enough
 
 
 def _focus_objs(d):
     """Objects to recompute and check under focus(): params, the focused Bodies and the active
     one, and new top-level objects (link arrays); None when focus is off."""
-    names = _focus.get(d.Uid)
+    names = _focus.get(d.Name)
     if not names:
         return None
     try:
@@ -2108,17 +2353,18 @@ def focus(*bodies):
     miss = [n for n in bodies if d.getObject(n) is None]
     if miss:
         raise FdmkitError(f'focus: no {miss}')
-    _focus[d.Uid] = list(bodies)
+    _focus[d.Name] = list(bodies)
     return f'focus: {", ".join(bodies) or "off"}'
 
 
 def full():
     """Leave focus, recompute everything and solve every Assembly once."""
     d = _doc()
-    _focus.pop(d.Uid, None)
+    _focus.pop(d.Name, None)
     d.recompute()
     fixed, lost = _fix_joint_refs(d)
-    d.recompute()
+    if fixed:
+        d.recompute()
     _show_tips(d)
     out = []
     for a in d.Objects:
@@ -2134,7 +2380,6 @@ def full():
 
 
 def _toggle_freeze(names, want):
-    import FreeCADGui as Gui
     d = _doc()
     objs = []
     for n in names:
@@ -2143,14 +2388,7 @@ def _toggle_freeze(names, want):
             raise FdmkitError(f'freeze: no {n}')
         objs.append(o)
         objs.extend(x for x in getattr(o, 'Group', []) if not x.TypeId.startswith('App::'))
-    objs = [o for o in objs if ('Freezed' in o.getStatusString()) != want]
-    if objs:
-        Gui.Selection.clearSelection()
-        for o in objs:
-            Gui.Selection.addSelection(o)
-        Gui.runCommand('Std_ToggleFreeze', 0)
-        Gui.Selection.clearSelection()
-    return len(objs)
+    return _set_frozen(objs, want)
 
 
 def freeze(*names):
@@ -2170,15 +2408,30 @@ _NO_FREEZE = ('App::Link', 'App::Part', 'App::DocumentObjectGroup',
               'App::Plane', 'App::Point')
 
 
-def _set_frozen(objs, want):
+# The Freeze bit is no property: FreeCAD shows it only in getStatusString(), which prints the
+# error text instead for an object in Error, and no transaction records it.
+_kit_frozen = globals().get('_kit_frozen') or {}    # doc name -> names of the objects the kit froze
+_freeze_log = []    # (objects, want) toggles of the running call, undone when it is rolled back
+
+
+def _is_frozen(o):
+    return 'Freezed' in o.getStatusString() or (_bad(o) and o.Name in _kit_frozen.get(o.Document.Name, ()))
+
+
+def _set_frozen(objs, want, log=True):
     import FreeCADGui as Gui
-    objs = [o for o in objs if ('Freezed' in o.getStatusString()) != want]
+    objs = [o for o in objs if _is_frozen(o) != want]
     if objs:
         Gui.Selection.clearSelection()
         for o in objs:
             Gui.Selection.addSelection(o)
-        Gui.runCommand('Std_ToggleFreeze', 0)
+        Gui.runCommand('Std_ToggleFreeze', 0)   # commits the pending transaction: run() books a new one
         Gui.Selection.clearSelection()
+        for o in objs:
+            names = _kit_frozen.setdefault(o.Document.Name, set())
+            names.add(o.Name) if want else names.discard(o.Name)
+        if log:
+            _freeze_log.append((objs, want))
     return len(objs)
 
 
@@ -2194,7 +2447,7 @@ def freeze_all():
 def thaw_all():
     """Thaw every frozen object of the document (marks them touched: run full() next)."""
     d = _doc()
-    n = _set_frozen([o for o in d.Objects if 'Freezed' in o.getStatusString()], False)
+    n = _set_frozen([o for o in d.Objects if _is_frozen(o)], False)
     return f'thaw_all: {n} objects'
 
 
@@ -2237,17 +2490,41 @@ def i10g_video(delay_ms=300):
 LOG_DIR = os.path.expanduser('~/Library/Logs/fdmkit')
 _ERR_ENTRY = re.compile(r'Traceback|Error|Exception|Segmentation fault|Assertion|failed')
 _STAMP = re.compile(r'^\d\d:\d\d:\d\d\s')
-_report = {'seen': 0, 'pending': []}
+_report = globals().get('_report') or {'seen': 0, 'pending': [], 'w': None}     # seen = closed text blocks already scanned
+
+
+def _report_widget():
+    """The Report view QTextEdit (cached; looked up again once Qt deleted it)."""
+    w = _report.get('w')
+    try:
+        if w is not None and w.objectName():
+            return w
+    except RuntimeError:
+        pass
+    import FreeCADGui as Gui
+    from PySide import QtWidgets
+    w = _report['w'] = Gui.getMainWindow().findChild(QtWidgets.QTextEdit, 'Report view')
+    return w
 
 
 def _report_lines():
-    """Lines of the GUI Report view; [] without a GUI."""
+    """Lines added to the GUI Report view since the last call (a cleared view starts over);
+    [] without a GUI. Reads only the new text blocks: the view is unbounded (256 MB seen)."""
     if not App.GuiUp:
         return []
-    import FreeCADGui as Gui
-    from PySide import QtWidgets
-    w = Gui.getMainWindow().findChild(QtWidgets.QTextEdit, 'Report view')
-    return w.toPlainText().splitlines() if w else []
+    w = _report_widget()
+    if w is None:
+        return []
+    from PySide import QtGui
+    doc = w.document()
+    last = doc.blockCount() - 1         # the last block is the line still open
+    start = _report['seen'] if _report['seen'] <= last else 0
+    _report['seen'] = last
+    if start >= last:
+        return []
+    cur = QtGui.QTextCursor(doc.findBlockByNumber(start))
+    cur.movePosition(QtGui.QTextCursor.End, QtGui.QTextCursor.KeepAnchor)
+    return cur.selectedText().split('\u2029')[:-1]
 
 
 def _report_scan():
@@ -2257,10 +2534,8 @@ def _report_scan():
         lines = _report_lines()
     except Exception:
         return []
-    start = _report['seen'] if _report['seen'] <= len(lines) else 0
-    _report['seen'] = len(lines)
     entries = []
-    for ln in lines[start:]:
+    for ln in lines:
         if _STAMP.match(ln) or not entries:
             entries.append([ln])
         else:
@@ -2304,16 +2579,22 @@ def errors(keep=False):
 
 # ---------------------------------------------------------------- entry
 AUTOSAVE_S = 300
-_saved = {}
-_rolled_back = {}   # doc name -> True after a call that was rolled back (see undo())
+_saved = globals().get('_saved') or {}         # doc name -> time of its last save (any save, see _XLinkObserver)
+_dirty = globals().get('_dirty') or set()      # names of documents changed by a call since their last save
+_rolled_back = globals().get('_rolled_back') or {}   # doc name -> True after a call that was rolled back (see undo())
 
 
 def _autosave(d):
-    """Save a document that has a file at most every AUTOSAVE_S seconds."""
+    """Save a document that has a file at most every AUTOSAVE_S seconds, only after a call
+    changed it and never while objects are frozen (the Freeze bit would go into the file)."""
     now = time.time()
-    if d.FileName and now - _saved.get(d.Name, 0) >= AUTOSAVE_S:
-        d.save()
-        _saved[d.Name] = now
+    if (not d.FileName or d.Name not in _dirty
+            or now - _saved.setdefault(d.Name, now) < AUTOSAVE_S
+            or any(_is_frozen(o) for o in d.Objects)):
+        return
+    d.save()
+    _saved[d.Name] = now
+    _dirty.discard(d.Name)
 
 
 def _ns():
@@ -2342,6 +2623,11 @@ def run(expr):
     Any failure rolls the whole batch back and names the failing step.
     '?expr' is read-only: its document changes are discarded, no recompute, no autosave."""
     expr = expr.strip()
+    if getattr(App, '_fdmkit_dispatch_timer', None) is None:
+        try:
+            _dispatch_watchdog()
+        except Exception:
+            pass
     if expr.replace(' ', '') in ('errors()', 'errors(keep=True)'):
         return _run(expr)
     # the Report view gets messages from Qt's event loop, so an error of the previous call often
@@ -2362,10 +2648,12 @@ def _run(expr):
         hint = ("; '?' marks the whole expr as read-only and goes only at its very start,"
                 " never inside a batch" if re.search(r'[;\n]\s*\?', expr) else '')
         return f'ERR parse: {e.msg} at col {e.offset}{hint}'
+    # FreeCAD records edits per document: book a transaction in every open one, so that a
+    # rollback (and '?') also covers documents reached by App.getDocument()/setActiveDocument
+    docs = list(App.listDocuments().values())
     if expr.startswith('?'):
-        d = App.ActiveDocument
-        if d:   # a read must not change the model: whatever it wrote is aborted below
-            d.openTransaction('?read')
+        for x in docs:      # a read must not change the model: whatever it wrote is aborted below
+            x.openTransaction('?read')
         try:
             ns = _ns()
             mod = ast.parse(expr[1:].strip())
@@ -2376,22 +2664,48 @@ def _run(expr):
         except Exception as e:
             return _line(f'ERR read: {type(e).__name__}: {e}')
         finally:
-            if d and _alive(d):
-                d.abortTransaction()
-    d = None if re.fullmatch(r'\s*undo\s*\(\s*\)\s*', expr) else App.ActiveDocument
-    if d:
-        d.openTransaction(expr[:60])
+            for x in docs:
+                if _alive(x):
+                    x.abortTransaction()
+    d = App.ActiveDocument
+    if re.fullmatch(r'\s*undo\s*\(\s*\)\s*', expr):      # undo() runs outside any transaction
+        d, docs = None, []
+    name = expr[:60]
+    names0 = set(App.listDocuments())
+    undo0 = {x.Name: list(x.UndoNames) for x in docs}
+    for x in docs:
+        x.openTransaction(name)
+    del _freeze_log[:]
+
+    def changed():
+        return [x for x in docs if _alive(x) and (x.HasPendingTransaction or list(x.UndoNames) != undo0[x.Name])]
     out, step = [], 0
     try:
         ns = _ns()
         for step, node in enumerate(ast.parse(expr).body, 1):
-            if isinstance(node, ast.Expr):
-                r = eval(compile(ast.Expression(node.value), '<fdmkit>', 'eval'), ns)
-                out.append('OK' if r is None else str(r))
-            else:
-                exec(compile(ast.Module([node], []), '<fdmkit>', 'exec'), ns)
+            _lazy['on'] = _lazy_call(node)
+            if not _lazy['on']:
+                _rc_flush()
+            try:
+                if isinstance(node, ast.Expr):
+                    r = eval(compile(ast.Expression(node.value), '<fdmkit>', 'eval'), ns)
+                    out.append('OK' if r is None else str(r))
+                else:
+                    exec(compile(ast.Module([node], []), '<fdmkit>', 'exec'), ns)
+            finally:
+                _lazy['on'] = False
+            for x in docs:      # a step that committed (Std_ToggleFreeze, doc.commitTransaction()) used the booking up
+                if _alive(x) and not x.HasPendingTransaction and not x.getBookedTransactionID():
+                    x.openTransaction(name)
+        _rc_flush()
+        ch = changed()
+        for x in docs:
+            if _alive(x):
+                x.commitTransaction()
+        _dirty.update(x.Name for x in ch)
+        for x in ch:
+            _rolled_back.pop(x.Name, None)
         if d and _alive(d):
-            d.commitTransaction()
             _rolled_back.pop(d.Name, None)
             try:
                 _autosave(d)
@@ -2399,17 +2713,37 @@ def _run(expr):
                 out.append(f'WARN autosave failed: {e}')
         return _line(' ; '.join(out) or 'OK')
     except Exception as e:
-        same = d is not None and _alive(d) and App.ActiveDocument == d
-        if d and _alive(d):
-            d.abortTransaction()
-            _rc(d)
-            _rolled_back[d.Name] = True
+        whole = all(_alive(x) for x in docs) and set(App.listDocuments()) == names0
+        _lazy['docs'].clear()       # the rollback below recomputes
+        _lazy['sketches'].clear()
+        ch = changed()
+        for objs, want in reversed(_freeze_log):    # before the undo below: the toggle commits too
+            try:
+                _set_frozen(objs, not want, log=False)
+            except Exception:
+                pass
+        live = [x for x in docs if _alive(x)]
+        for x in live:
+            x.abortTransaction()
+            for _ in range(_undo_added(x, undo0[x.Name])):      # steps committed inside the batch
+                x.undo()
+        # recompute only after every document is reverted, sources before their dependents
+        for x in sorted((x for x in live if x in ch or x == d), key=lambda x: len(x.getDependentDocuments())):
+            _rc(x)
+            _rolled_back[x.Name] = True
         msg = str(e) if isinstance(e, FdmkitError) else f'{type(e).__name__}: {e}'
-        if same or d is None:
+        if whole:
             tail = ' (batch rolled back)' if step > 1 else ''
-        else:   # reopen()/new()/closeDocument inside the batch: the rollback reached only the old document
-            tail = ' (the active document changed during the call: earlier steps may NOT be rolled back)'
+        else:   # reopen()/new()/closeDocument inside the batch: a closed or new document is not rolled back
+            tail = ' (a document was opened or closed during the call: earlier steps may NOT be rolled back)'
         return _line(f'ERR step {step}: {msg}' + tail)
+
+
+def _undo_added(d, before):
+    """Number of undo steps on top of the stack that were not there before the call (the stack
+    is capped, so UndoCount alone cannot tell once it is full)."""
+    now = list(d.UndoNames)
+    return next((k for k in range(len(now) + 1) if now[k:] == before[:len(now) - k]), 0)
 
 
 def _line(s):
@@ -2417,12 +2751,59 @@ def _line(s):
     return ' '.join(x.strip() for x in s.splitlines() if x.strip())
 
 
+def _dispatch_tick():
+    try:
+        m = sys.modules.get('rpc_server.gui_dispatch')
+        if m is not None and not hasattr(m, 'start_heartbeat'):
+            m.process_gui_tasks(False)
+    except Exception:
+        pass
+
+
+def _dispatch_watchdog():
+    """FreeCADMCP <= 0.1.25: its 500 ms dispatch heartbeat stops for good once a tick fires
+    inside a running task (any recompute spins the event loop); a call that then arrives while
+    a mouse button is held, a popup or a dialog is open waits the whole RPC timeout instead of
+    being retried. A timer of our own keeps the queue polled. Dropped once the addon has
+    start_heartbeat."""
+    if not App.GuiUp:
+        return
+    m = sys.modules.get('rpc_server.gui_dispatch')
+    if m is None:
+        return                      # addon not loaded yet: asked again by the next run()
+    if hasattr(m, 'start_heartbeat'):
+        App._fdmkit_dispatch_timer = False      # fixed addon
+        return
+    from PySide import QtCore
+    app = QtCore.QCoreApplication.instance()
+    if app is None or QtCore.QThread.currentThread() != app.thread():
+        return                      # a QTimer must live on the GUI thread
+    t = QtCore.QTimer()
+    t.setInterval(500)
+    t.timeout.connect(_dispatch_tick)
+    t.start()
+    App._fdmkit_dispatch_timer = t
+
+
 def _boot():
+    timer = getattr(App, '_fdmkit_dispatch_timer', None)
+    if timer:
+        timer.stop()
+    App._fdmkit_dispatch_timer = None
+    try:
+        _dispatch_watchdog()
+    except Exception:
+        pass
     old = getattr(App, '_fdmkit_xlink_observer', None)
     if old:
         App.removeDocumentObserver(old)
     App._fdmkit_xlink_observer = _XLinkObserver()   # harmless where paths are already relative
     App.addDocumentObserver(App._fdmkit_xlink_observer)
+    if old:     # reload(): the errors already in the Report view were reported before
+        try:
+            _report['seen'] = _report_widget().document().blockCount() - 1
+        except Exception:
+            pass
     v = App.Version()
     ver = f'{v[0]}.{v[1]}.{v[2]} {v[3].split()[0]}'
     p = App.ParamGet(_PREF)

@@ -144,13 +144,17 @@ def _cnc_concave(sh, e, f1, f2):
     n2, v2 = _cnc_into(f2, p, t)
     if v1 is None or v2 is None or n1.getAngle(n2) <= math.radians(5):
         return False, p
+    a, b = v1.dot(n2), v2.dot(n1)       # stepping into one face goes along the other's outward normal
+    if a * b > 0 and min(abs(a), abs(b)) > 0.05:
+        return a > 0, p                 # both normals agree: no solid point classification (25 % of cnc())
     return not sh.isInside(p + (v1 + v2) * 0.02, 1e-4, True), p
 
 
 def _cnc_body(b, r):
     """One workpiece: issues by kind, offending face indices, holes."""
     import MeshPart
-    sh = b.Shape
+    sh = Part.Shape(b.Shape)    # part coordinates: an Assembly joint may have moved the Body
+    sh.Placement = b.Placement.inverse().multiply(sh.Placement)
     pa, da = _cnc_lathe_axis(sh)
     mesh = MeshPart.meshFromShape(Shape=sh, LinearDeflection=0.02, AngularDeflection=0.2)
     F = sh.Faces

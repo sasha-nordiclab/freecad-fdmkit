@@ -9,7 +9,7 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
 - **Native PartDesign only.** Bodies, datum planes, sketches, Pad, Pocket, Hole, Revolution, Groove and patterns: the same model you would build by hand, editable in the GUI afterwards. No imported meshes, no `Part::Feature` blobs.
 - **Fully constrained sketches.** Every sketch helper (`rect`, `circ`, `slot`, `poly`, `fil`) adds its own constraints. A call fails and rolls back unless the sketch ends at 0 degrees of freedom.
 - **Sizes live in a spreadsheet.** `P(w=40, d='w/2')` writes to a `params` sheet. Sketches and features refer to the parameters by name, so changing one value updates the whole part.
-- **One call, one transaction.** If any step of a batch fails, the whole batch is undone and the reply names the failing step. `undo()` reverts the last committed batch and names it; right after an ERR (already rolled back) it refuses once. `?expr` reads discard any change they make. Documents that have a file are saved at most every 5 minutes.
+- **One call, one transaction.** If any step of a batch fails, the whole batch is undone and the reply names the failing step. `undo()` reverts the last committed batch and names it; right after an ERR (already rolled back) it refuses once. `?expr` reads discard any change they make. Both cover every open document, also one reached through `App.getDocument()`. The active document, if it has a file, is saved at most every 5 minutes, only after a call that changed it.
 - **Checks.** `chk()` reports broken features, sketches not at 0 degrees of freedom and a body that is not one valid solid; `why(name)` explains one failure, and `tree()` prints the feature tree.
 - **FDM rules for the agent.** [`skill/rules.md`](skill/rules.md) covers walls, overhangs, holes, fits, edges and print orientation. [`skill/fem.md`](skill/fem.md) is a method for strength checks with FreeCAD FEM and CalculiX. The MCP server sends a short version of these rules to the agent when it connects.
 - **Print time and grams.** [`tools/orca_slice.py`](tools/orca_slice.py) slices an STL with the OrcaSlicer CLI using your own presets and reads the time and filament weight from the G-code.
@@ -58,6 +58,8 @@ It exposes **one MCP tool**, `run(expr)`. The agent sends a short batch of calls
    tool_timeout_sec = 180
    ```
 
+   One call may run for `FDMKIT_RPC_TIMEOUT` seconds (default 120, environment variable of the server; FreeCAD caps it at 1800). Keep the client's tool timeout above it. A FreeCAD that is busy or shows a dialog answers within 15 s.
+
 6. Optional, for Claude Code: copy or link [`skill/`](skill/) into `~/.claude/skills/fdmkit/` so that the agent loads the modelling workflow and the FDM rules when it needs them.
 
 ## Use
@@ -86,9 +88,9 @@ python3 tools/fc.py --reload && python3 tools/fc.py --selftest
 | `body(name)` | New Body in the open document, made the active Body of its 3D views (without a 3D view helpers use the last Body); an existing name is an ERR |
 | `help(topic=None)` | Reference text of rarely used calls: `help()` lists the topics (starts regions patterns dressup hole assembly anim drawing cnc cam), `help('cam')` gives one; works as `?help('cam')` |
 | `P(name=val, ...)` / `P()` | Set parameters / list them |
-| `plane(name, base='XY', offset=0)` | Datum plane on an origin plane or on another datum |
+| `plane(name, base='XY', offset=0)` | Datum plane on an origin plane (`'XY'`, `'Box.XY'`) or on another datum |
 | `midplane(name, a, b)` | Datum plane midway between two planes or faces (bisector if they are not parallel) |
-| `sk(name, on='XY')` | Sketch on an origin plane or a datum |
+| `sk(name, on='XY')` | Sketch on an origin plane or a datum; `'Box.XY'` names the Body (a document without a 3D view has no active Body to switch), a datum picks the Body that owns it |
 | `rect(sk, w, h, x=0, y=0, at='c')` | Rectangle, centred (`'c'`) or from its bottom-left corner (`'bl'`) |
 | `circ(sk, d, x, y)` | Circle |
 | `slot(sk, length, width, x, y, angle)` | Slot with round ends |

@@ -189,32 +189,43 @@ def _segs(it):
     return ([it['line']] if 'line' in it else []) + it.get('ext', [])
 
 
-def _hits(it, items, grid, ctx, gap=0.5):
-    """Why this label/its lines conflict with the rest; [] = clean."""
+def _hits_iter(it, items, grid, ctx, gap=0.5):
+    """Yield why this label/its lines conflict with the rest, one reason at a time."""
     r = it['rect']
     g = (r[0] - gap, r[1] - gap, r[2] + gap, r[3] + gap)
-    out = []
     x0, y0, x1, y1 = ctx['frame']
     if r[0] < x0 or r[1] < y0 or r[2] > x1 or r[3] > y1:
-        out.append('off sheet')
+        yield 'off sheet'
     if any(_ov(r, k) for k in ctx['keepout']):
-        out.append('keepout')
+        yield 'keepout'
     own = it['v'].Name
-    out += ['on view ' + n for n, b in ctx['boxes'].items() if n != own and _ov(r, b)]
+    for n, b in ctx['boxes'].items():
+        if n != own and _ov(r, b):
+            yield 'on view ' + n
     if grid.hit(r):
-        out.append('on edge')
+        yield 'on edge'
+    mine = _segs(it)
     for o in items:
         if o is it:
             continue
         if _ov(g, o['rect']):
-            out.append('label ~ ' + o['short'])
+            yield 'label ~ ' + o['short']
         elif any(_seg_hits(r, *s) for s in _segs(o)):
-            out.append('on line of ' + o['short'])
-        elif any(_seg_hits(o['rect'], *s) for s in _segs(it)):
-            out.append('line over ' + o['short'])
+            yield 'on line of ' + o['short']
+        elif any(_seg_hits(o['rect'], *s) for s in mine):
+            yield 'line over ' + o['short']
         if 'line' in it and 'line' in o and _cross(it['line'], o['line']):
-            out.append('crosses ' + o['short'])
-    return out
+            yield 'crosses ' + o['short']
+
+
+def _hits(it, items, grid, ctx, gap=0.5):
+    """Why this label/its lines conflict with the rest; [] = clean."""
+    return list(_hits_iter(it, items, grid, ctx, gap))
+
+
+def _clean(it, items, grid, ctx):
+    """No conflict at all: stops at the first one (the placement searches ask only this)."""
+    return next(_hits_iter(it, items, grid, ctx), None) is None
 
 
 def _cross(a, b):
@@ -396,7 +407,7 @@ def _slide(it, items, ctx, off):
     for d in sorted({i * 1.0 for i in range(-int(b - a) - 20, int(b - a) + 21)}, key=abs):
         it[k] = v0 + d
         _geo(it, off)
-        if not _hits(it, items, ctx['grid'], ctx):
+        if _clean(it, items, ctx['grid'], ctx):
             return True
     it[k] = v0
     _geo(it, off)
@@ -420,7 +431,7 @@ def dim_layout(page, inside=(), sides=None, first=10, pitch=7, keepout=(), apply
     demoted = _assign(outer, ctx, off, sides, first, pitch, fixed)
     outer = [it for it in outer if it not in demoted]
     for it in outer:
-        if _hits(it, items, ctx['grid'], ctx):
+        if not _clean(it, items, ctx['grid'], ctx):
             _slide(it, items, ctx, off)
     moved = 0
     for it in items:
@@ -432,7 +443,7 @@ def dim_layout(page, inside=(), sides=None, first=10, pitch=7, keepout=(), apply
             for dx in (0, 2, -2, 4, -4, 8, -8, 12, -12):
                 it['X'], it['Y'] = X0 + dx, Y0 + dy
                 _geo(it, off)
-                if not _hits(it, items, ctx['grid'], ctx):
+                if _clean(it, items, ctx['grid'], ctx):
                     best = (X0 + dx, Y0 + dy)
                     break
             if best:
@@ -486,6 +497,9 @@ def dim_add(page, view, name, kind, refs, fmt='%.2f'):
     circle (radius, centre near x, y). Style copied from the page's first dimension; place it with
     dim_layout()."""
     p = _page(page)
+    if not p.KeepUpdated:   # a frozen page hands out a stale view cache: VertexN would bind to other points
+        raise ValueError(f'dim_add: {p.Name} is frozen (KeepUpdated False), its view geometry may be stale; '
+                         f'page_sync({p.Name!r}) first, dim_add in the next call')
     d = App.ActiveDocument
     v = d.getObject(view) if isinstance(view, str) else view
     sub = (_circle(v, *refs),) if kind in ('Diameter', 'Radius') else tuple(_vertex(v, *q) for q in refs)
@@ -570,15 +584,19 @@ def ink(page, ppm=5):
     from PySide import QtCore, QtGui, QtSvg
     p = _page(page)
     import FreeCADGui as Gui
+    import shutil
     d = tempfile.mkdtemp(prefix='fdmkit_ink_')
     f = os.path.join(d, p.Name + '.svg')
-    # Proven 27.1 order: open the page, process events, export in the same call. A page opened in
-    # an earlier call and exported later segfaulted in ViewProviderPage::setTemplateMarkers.
-    Gui.ActiveDocument.getObject(p.Name).doubleClicked()
-    Gui.updateGui()
-    TechDrawGui.exportPageAsSvg(p, f)
-    with open(f, encoding='utf-8') as fh:
-        svg = _strip_template(fh.read())
+    try:
+        # Proven 27.1 order: open the page, process events, export in the same call. A page opened in
+        # an earlier call and exported later segfaulted in ViewProviderPage::setTemplateMarkers.
+        p.ViewObject.doubleClicked()    # the page's own document, not whichever one is active
+        Gui.updateGui()
+        TechDrawGui.exportPageAsSvg(p, f)
+        with open(f, encoding='utf-8') as fh:
+            svg = _strip_template(fh.read())
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
     W, H = p.Template.Width.Value, p.Template.Height.Value
     w, h = int(round(W * ppm)), int(round(H * ppm))
     img = QtGui.QImage(w, h, QtGui.QImage.Format_ARGB32)
